@@ -71,7 +71,7 @@ import {
 } from './media-models.js';
 import { readMaskedConfig, writeConfig } from './media-config.js';
 import { agentCliEnvForAgent, readAppConfig, writeAppConfig } from './app-config.js';
-import { OrbitService, formatLocalProjectTimestamp } from './orbit.js';
+import { OrbitService, formatLocalProjectTimestamp, renderOrbitTemplateSystemPrompt } from './orbit.js';
 import {
   buildProjectArchive,
   buildBatchArchive,
@@ -4771,11 +4771,15 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     const assistantMessageId = `orbit-assistant-${randomUUID()}`;
     const projectName = `Orbit · ${formatLocalProjectTimestamp(startedAt)}`;
 
+    const orbitDesignSystemId = template?.designSystemRequired === false
+      ? null
+      : appConfig.designSystemId ?? null;
+
     insertProject(db, {
       id: projectId,
       name: projectName,
       skillId: 'live-artifact',
-      designSystemId: appConfig.designSystemId ?? null,
+      designSystemId: orbitDesignSystemId,
       pendingPrompt: null,
       metadata: { kind: 'orbit', trigger },
       createdAt: now,
@@ -4835,11 +4839,12 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       assistantMessageId: run.assistantMessageId,
       clientRequestId: run.clientRequestId,
       skillId: 'live-artifact',
-      designSystemId: appConfig.designSystemId ?? null,
+      designSystemId: orbitDesignSystemId,
       model: modelPrefs.model ?? null,
       reasoning: modelPrefs.reasoning ?? null,
       message: prompt,
       systemPrompt: [
+        renderOrbitTemplateSystemPrompt(template),
         'You are Orbit, an autonomous activity-summary agent inside Open Design.',
         'You must discover connectors and connector tools yourself through the OD CLI; the daemon has not chosen tools for you.',
         'You must create and register a Live Artifact as the final deliverable. Do not merely describe what you would do.',
@@ -4878,6 +4883,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       name: skill.name,
       examplePrompt: skill.examplePrompt,
       dir: skill.dir,
+      body: skill.body,
+      designSystemRequired: skill.designSystemRequired !== false,
     };
   });
 

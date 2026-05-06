@@ -50,6 +50,8 @@ export interface OrbitTemplateSelection {
   name: string;
   examplePrompt: string;
   dir: string;
+  body: string;
+  designSystemRequired: boolean;
 }
 
 export type OrbitRunHandler = (request: {
@@ -217,6 +219,23 @@ export function buildOrbitPrompt(now = new Date(), template?: OrbitTemplateSelec
     );
   }
   return lines.join('\n');
+}
+
+export function renderOrbitTemplateSystemPrompt(template: OrbitTemplateSelection | null): string {
+  if (!template) return '';
+  return [
+    `## Selected Orbit template skill — ${template.name}`,
+    '',
+    'This Orbit run was explicitly steered with the selected template skill below. Treat it as authoritative for the artifact structure, visual language, tokens, layout, and domain-specific synthesis rules.',
+    'The generic Orbit digest brief and the live-artifact workflow still apply for data collection and artifact registration, but they must not override the selected template\'s visual/source-of-truth rules.',
+    template.designSystemRequired
+      ? 'If an active design system is also present, follow the selected template first for structure and interaction, then apply compatible design-system tokens only where the template permits them.'
+      : 'This selected template opts out of external design-system injection. Do not apply the workspace design system or brand tokens; use only the template\'s own visual language.',
+    '',
+    'Before writing files, read the staged side files referenced by this skill, especially `example.html` when present, and mirror that example as instructed by the skill.',
+    '',
+    template.body.trim(),
+  ].join('\n');
 }
 
 export class OrbitService {

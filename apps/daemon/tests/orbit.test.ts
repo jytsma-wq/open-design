@@ -4,7 +4,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 
 import { describe, expect, it } from 'vitest';
 
-import { buildOrbitPrompt, OrbitService, type OrbitTemplateSelection } from '../src/orbit.js';
+import {
+  buildOrbitPrompt,
+  OrbitService,
+  renderOrbitTemplateSystemPrompt,
+  type OrbitTemplateSelection,
+} from '../src/orbit.js';
 
 describe('buildOrbitPrompt', () => {
   it('embeds selected Orbit template instructions and staged side-file guidance', () => {
@@ -13,6 +18,8 @@ describe('buildOrbitPrompt', () => {
       name: 'orbit-general',
       examplePrompt: 'Render the editorial bento dashboard.',
       dir: path.join('/repo', 'skills', 'orbit-general'),
+      body: 'Open and mirror the shipped `example.html` before writing output. Use exclusively the canvas tokens.',
+      designSystemRequired: false,
     };
 
     const prompt = buildOrbitPrompt(new Date('2026-05-06T15:32:52.361Z'), template);
@@ -25,6 +32,27 @@ describe('buildOrbitPrompt', () => {
     expect(prompt).not.toContain('Selected template skill instructions:');
     expect(prompt).toContain('Selected template example prompt:');
     expect(prompt).toContain('Render the editorial bento dashboard.');
+  });
+
+  it('renders the selected template skill body as authoritative run instructions', () => {
+    const template: OrbitTemplateSelection = {
+      id: 'orbit-general',
+      name: 'orbit-general',
+      examplePrompt: 'Render the editorial bento dashboard.',
+      dir: path.join('/repo', 'skills', 'orbit-general'),
+      body: 'Open and mirror the shipped `example.html` before writing output. Use exclusively the canvas tokens.',
+      designSystemRequired: false,
+    };
+
+    const prompt = renderOrbitTemplateSystemPrompt(template);
+
+    expect(prompt).toContain('Selected Orbit template skill — orbit-general');
+    expect(prompt).toContain('Treat it as authoritative');
+    expect(prompt).toContain('must not override the selected template');
+    expect(prompt).toContain('opts out of external design-system injection');
+    expect(prompt).toContain('Do not apply the workspace design system');
+    expect(prompt).toContain('Open and mirror the shipped `example.html`');
+    expect(prompt).toContain('Use exclusively the canvas tokens.');
   });
 });
 
