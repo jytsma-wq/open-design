@@ -1725,46 +1725,59 @@ code {
   width: clamp(220px, 36%, 320px);
 }
 
-/* Preview slot — sits flush inside the automation card. The wrapper
-   itself carries the row layout (mark · body · clear) and the state
-   tinting (default / selected / missing). Previously a card div
-   wrapped these children; folding the layout up one level removes a
-   nested container so the preview reads as inline metadata for the
-   select rather than a separate card. The wrapper's box treatment
-   (border, background, padding) is keyed to the state classes so the
-   loading skeleton — rendered while no state class is set — keeps its
-   own dashed slab without competing with a parent slab. */
-.orbit-automation-template-preview {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
-  margin: 0 18px 16px;
-  min-height: 64px;
-}
-.orbit-automation-template-preview.is-selected,
-.orbit-automation-template-preview.is-missing {
-  padding: 12px 14px;
-  border: 1px dashed var(--border);
+/* Inline warning variant of the row sub-copy. Used by the Prompt
+   template row when the saved skill id is no longer in the registry —
+   takes the place of the standard descriptive sub-line and inlines a
+   small Reset action that pushes the config back to the default
+   (`orbit-general`). The warning lives flush inside the automation
+   row so we do not need a separate preview panel for the missing
+   state. */
+.orbit-automation-sub-warning {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  margin-top: 2px;
   border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-  transition: border-color 160ms ease, background 160ms ease;
+  background: color-mix(in srgb, #c47a2c 10%, var(--bg-panel));
+  color: #8a5217;
+  font-weight: 500;
 }
-.orbit-automation-template-preview.is-selected {
-  border-style: solid;
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--border));
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--accent-tint) 55%, var(--bg-panel)) 0%, var(--bg-panel) 100%);
+.orbit-automation-sub-warning svg {
+  color: #c47a2c;
+  flex-shrink: 0;
 }
-.orbit-automation-template-preview.is-missing {
-  border-style: solid;
-  border-color: color-mix(in srgb, #c47a2c 40%, var(--border));
+.orbit-automation-sub-warning strong {
+  color: #6c3f0f;
+  font-weight: 600;
+}
+.orbit-automation-sub-action {
+  appearance: none;
+  -webkit-appearance: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  margin-left: auto;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #8a5217;
+  background: var(--bg-panel);
+  border: 1px solid color-mix(in srgb, #c47a2c 32%, var(--border));
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+}
+.orbit-automation-sub-action:hover {
+  color: #6c3f0f;
+  border-color: color-mix(in srgb, #c47a2c 55%, var(--border));
   background: color-mix(in srgb, #c47a2c 8%, var(--bg-panel));
 }
-/* Loading state child needs to span the full grid so its own dashed
-   slab fills the row width. */
-.orbit-automation-template-preview > .orbit-template-preview-skeleton {
-  grid-column: 1 / -1;
+.orbit-automation-sub-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, #c47a2c 65%, var(--accent));
+  outline-offset: 2px;
 }
 
 /* Native select wrapper. Originally a labelled grid (label + select);
@@ -1822,133 +1835,6 @@ code {
   pointer-events: none;
 }
 
-/* Preview slab — surfaces *what* the selection means right under the
-   control. Three visual variants (default / selected / missing) keep the
-   semantic meaning unmistakable. The preview wrapper itself
-   (.orbit-automation-template-preview) carries both the layout grid and
-   the state styling — there is no inner card div. */
-.orbit-template-preview-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg-panel);
-  border: 1px solid var(--border);
-  color: var(--text-muted);
-  flex-shrink: 0;
-}
-.orbit-automation-template-preview.is-selected .orbit-template-preview-mark {
-  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, #000) 100%);
-  border-color: transparent;
-  color: #fff;
-  box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 28%, transparent);
-}
-.orbit-automation-template-preview.is-missing .orbit-template-preview-mark {
-  color: #c47a2c;
-  border-color: color-mix(in srgb, #c47a2c 40%, var(--border));
-  background: color-mix(in srgb, #c47a2c 12%, var(--bg-panel));
-}
-
-.orbit-template-preview-body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-.orbit-template-preview-kicker {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--text-soft);
-}
-.orbit-automation-template-preview.is-selected .orbit-template-preview-kicker {
-  color: var(--accent-strong);
-}
-.orbit-automation-template-preview.is-missing .orbit-template-preview-kicker {
-  color: #a0631e;
-}
-.orbit-template-preview-name {
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-  letter-spacing: -0.005em;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.orbit-template-preview-desc {
-  font-size: 11.5px;
-  line-height: 1.5;
-  color: var(--text-muted);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.orbit-template-clear {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 9px;
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--text-muted);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
-  cursor: pointer;
-  align-self: center;
-  transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
-  white-space: nowrap;
-}
-.orbit-template-clear:hover {
-  color: var(--text);
-  border-color: var(--border-strong);
-  background: var(--bg-panel);
-}
-.orbit-template-clear:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* Loading skeleton — shimmer is intentionally subtle so it doesn't compete
-   with the live "Active template" treatment when it lands. */
-.orbit-template-preview-skeleton {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  width: 100%;
-  padding: 14px;
-  border: 1px dashed var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
-}
-.orbit-template-skeleton-line {
-  height: 10px;
-  border-radius: 4px;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--border) 60%, transparent) 0%,
-    color-mix(in srgb, var(--border-strong) 70%, transparent) 50%,
-    color-mix(in srgb, var(--border) 60%, transparent) 100%
-  );
-  background-size: 200% 100%;
-  animation: orbit-template-shimmer 1.6s ease-in-out infinite;
-}
-.orbit-template-skeleton-line.is-short { width: 35%; }
-.orbit-template-skeleton-line.is-long { width: 75%; }
-
-@keyframes orbit-template-shimmer {
-  0%   { background-position: 100% 0; }
-  100% { background-position: -100% 0; }
-}
-
 @media (max-width: 620px) {
   /* On narrow viewports the template row should stack: title block on top,
      select control full-width below it. */
@@ -1960,13 +1846,6 @@ code {
     width: 100%;
     min-width: 0;
     justify-content: stretch;
-  }
-  .orbit-automation-template-preview {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .orbit-automation-template-preview .orbit-template-clear {
-    grid-column: 1 / -1;
-    justify-self: end;
   }
 }
 
