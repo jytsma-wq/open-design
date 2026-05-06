@@ -284,15 +284,18 @@ export class OrbitService {
       try {
         const agentResult = await handlerStart.completion;
         const completedAt = new Date().toISOString();
+        const connectorsSucceeded = agentResult.status === 'succeeded' ? 1 : 0;
+        const connectorsFailed = agentResult.status === 'failed' ? 1 : 0;
+        const connectorsSkipped = agentResult.status === 'canceled' ? 1 : 0;
         const base = {
           id: runId,
           startedAt,
           completedAt,
           trigger,
-          connectorsChecked: 0,
-          connectorsSucceeded: agentResult.status === 'succeeded' ? 1 : 0,
-          connectorsFailed: agentResult.status === 'failed' ? 1 : 0,
-          connectorsSkipped: agentResult.status === 'canceled' ? 1 : 0,
+          connectorsChecked: connectorsSucceeded + connectorsFailed + connectorsSkipped,
+          connectorsSucceeded,
+          connectorsFailed,
+          connectorsSkipped,
           agentRunId: agentResult.agentRunId,
           ...(agentResult.artifactId === undefined ? {} : { artifactId: agentResult.artifactId }),
           ...(agentResult.artifactProjectId === undefined ? {} : { artifactProjectId: agentResult.artifactProjectId }),
