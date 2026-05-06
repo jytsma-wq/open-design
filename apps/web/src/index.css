@@ -4910,6 +4910,7 @@ button.connector-action.is-loading {
 .design-live-count {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   border-radius: 999px;
   border: 1px solid var(--border);
   padding: 2px 7px;
@@ -4917,6 +4918,8 @@ button.connector-action.is-loading {
   font-weight: 700;
   letter-spacing: 0.03em;
   text-transform: uppercase;
+  white-space: nowrap;
+  line-height: 1.2;
   background: var(--bg-panel);
 }
 .live-artifact-badge.live {
@@ -5445,8 +5448,12 @@ button.connector-action.is-loading {
   cursor: pointer;
   flex-shrink: 0;
   max-width: 220px;
+  min-width: 0;
   color: var(--text-muted);
   transition: background 120ms ease, color 120ms ease;
+}
+.ws-tab.live-artifact-tab {
+  max-width: 320px;
 }
 .ws-tab:hover { background: var(--bg-subtle); color: var(--text); }
 .ws-tab:focus-visible {
@@ -5459,6 +5466,7 @@ button.connector-action.is-loading {
   font-weight: 500;
 }
 .ws-tab .tab-icon {
+  flex: 0 0 auto;
   font-size: 13px;
   color: var(--text-muted);
   width: 14px;
@@ -5466,20 +5474,30 @@ button.connector-action.is-loading {
 }
 .ws-tab.active .tab-icon { color: var(--text); }
 .ws-tab-label {
+  flex: 1 1 auto;
+  min-width: 32px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 180px;
 }
+.ws-tab.live-artifact-tab .ws-tab-label {
+  max-width: none;
+}
 .ws-live-artifact-badges {
+  flex: 0 0 auto;
   flex-wrap: nowrap;
-  max-width: 145px;
-  overflow: hidden;
+  max-width: none;
+  overflow: visible;
 }
 .ws-live-artifact-badges .live-artifact-badge:not(.live):not(.refreshing):not(.refresh-failed):not(.archived) {
   display: none;
 }
+.ws-live-artifact-badges:has(.refreshing) .live-artifact-badge.live {
+  display: none;
+}
 .ws-tab-close {
+  flex: 0 0 auto;
   border: none;
   background: transparent;
   padding: 0 2px;

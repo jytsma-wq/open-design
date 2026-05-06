@@ -39,12 +39,28 @@ export interface OrbitAgentRunResult {
   summary?: string;
 }
 
+export interface OrbitRunHandlerStart {
+  projectId: string;
+  agentRunId: string;
+  completion: Promise<OrbitAgentRunResult>;
+}
+
 export type OrbitRunHandler = (request: {
   runId: string;
   trigger: 'manual' | 'scheduled';
   startedAt: string;
   prompt: string;
-}) => Promise<OrbitAgentRunResult>;
+}) => Promise<OrbitRunHandlerStart>;
+
+export function formatLocalProjectTimestamp(iso: string): string {
+  const d = new Date(iso);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
 
 export interface OrbitStatus {
   config: OrbitConfigPrefs;
@@ -59,7 +75,6 @@ export const DEFAULT_ORBIT_CONFIG: OrbitConfigPrefs = {
 };
 
 const SUMMARY_FILE = 'activity-summary.json';
-export const ORBIT_PROJECT_ID = 'orbit';
 
 function normalizeOrbitConfig(config: Partial<OrbitConfigPrefs> | undefined): OrbitConfigPrefs {
   const time = typeof config?.time === 'string' && /^\d{2}:\d{2}$/.test(config.time)
@@ -140,12 +155,19 @@ export function buildOrbitPrompt(now = new Date()): string {
     `Time window: ${start} through ${end}.`,
     '',
     'This is an autonomous scheduled/manual Orbit job. Do not ask follow-up questions, do not emit a question form, and do not wait for user input. Use sensible defaults and proceed.',
+    'Optimize for fast completion: use at most 3 connector executions and avoid broad schema spelunking unless a command fails. After `tools live-artifacts create` returns ok, send one concise final message with the artifact id and stop.',
     '',
     'Use the live-artifact skill to author and register the artifact. Use the Open Design CLI wrappers to discover and call connectors:',
     '- List available connected connector tools with `"$OD_NODE_BIN" "$OD_BIN" tools connectors list`.',
     '- Decide which read-only connector tools are appropriate for the 24h activity window; do not rely on daemon-provided tool choices.',
-    '- Execute only the connector tools needed for a useful digest with `"$OD_NODE_BIN" "$OD_BIN" tools connectors execute --connector <id> --tool <name> --input input.json` after writing a small JSON input file.',
+    '- Execute only the connector tools needed for a useful digest with `"$OD_NODE_BIN" "$OD_BIN" tools connectors execute --connector <id> --tool <name> --input .orbit-tmp/<connector>-<tool>.json` after writing a small JSON input file. Always write these inputs under the `.orbit-tmp/` subdirectory (create it if missing) — files at the project root show up in the user-facing Design Files panel, while dot-prefixed paths are hidden. Reuse the same path when retrying the same tool.',
     '- Prefer search/list/activity-style tools. Avoid provider metadata, api_root, schema, health, status, broad fetch_all, or block-content dump tools unless they are truly necessary.',
+    '',
+    'Refreshable source registration (required for the manual Refresh button to work):',
+    '- The artifact must declare a single `document.sourceJson` of `type: "connector_tool"` so the daemon knows what to re-run on manual refresh. With no source declared, the user gets "no refreshable source" when clicking Refresh.',
+    '- Pick the most representative read-only connector tool you actually executed for this digest (typically an activity/search/list tool over the 24h window). Reuse the same connector + tool + input you successfully ran above.',
+    '- Set `document.sourceJson` to: `{ "type": "connector_tool", "toolName": "<tool>", "input": <same JSON object you passed to --input>, "connector": { "connectorId": "<id>", "toolName": "<tool>", "accountLabel": "<label if known>" }, "refreshPermission": "manual_refresh_granted_for_read_only" }`. Keep `input` bounded and free of credentials/raw payloads.',
+    '- Even though the digest aggregates several connectors, only one source can be registered for refresh; choose the one whose re-run best represents "what changed in the last 24h" for the user.',
     '',
     'The artifact should include:',
     '- Executive summary: 3-5 bullets of the most important changes/activity.',
@@ -158,7 +180,7 @@ export function buildOrbitPrompt(now = new Date()): string {
     '- GitHub: “open-design had 4 repositories updated in the window; the most notable activity was a push to apps/daemon touching connector execution and a PR discussing Orbit automation.”',
     '- Notion: “Product Notes and Launch Checklist were the only matching pages; Launch Checklist changed around connector onboarding and should be reviewed before release.”',
     '',
-    'If connector data is sparse, still create the Live Artifact and clearly say what was checked and what was missing. Do not invent activity. Keep the visual design polished but lightweight.',
+    'Keep the artifact compact: a single responsive HTML view, no more than roughly 200 lines of template/CSS, and no lengthy design critique pass. If connector data is sparse, still create the Live Artifact and clearly say what was checked and what was missing. Do not invent activity. Keep the visual design polished but lightweight.',
   ].join('\n');
 }
 
@@ -166,7 +188,10 @@ export class OrbitService {
   private config: OrbitConfigPrefs = DEFAULT_ORBIT_CONFIG;
   private timer: NodeJS.Timeout | null = null;
   private nextRunAtValue: Date | null = null;
-  private runningPromise: Promise<OrbitActivitySummary> | null = null;
+  private starting: Promise<{ projectId: string; agentRunId: string }> | null = null;
+  private inflight: Promise<OrbitActivitySummary> | null = null;
+  private inflightProjectId: string | null = null;
+  private inflightAgentRunId: string | null = null;
   private runHandler: OrbitRunHandler | null = null;
 
   constructor(private readonly dataDir: string) {}
@@ -183,19 +208,76 @@ export class OrbitService {
   async status(): Promise<OrbitStatus> {
     return {
       config: this.config,
-      running: this.runningPromise !== null,
+      running: this.starting !== null || this.inflight !== null,
       nextRunAt: this.nextRunAtValue?.toISOString() ?? null,
       lastRun: await readLastSummary(this.dataDir),
     };
   }
 
-  async run(trigger: 'manual' | 'scheduled'): Promise<OrbitActivitySummary> {
-    if (this.runningPromise) return this.runningPromise;
-    this.runningPromise = this.runOnce(trigger).finally(() => {
-      this.runningPromise = null;
-      this.reschedule();
+  async start(trigger: 'manual' | 'scheduled'): Promise<{ projectId: string; agentRunId: string }> {
+    if (this.inflight && this.inflightProjectId && this.inflightAgentRunId) {
+      return { projectId: this.inflightProjectId, agentRunId: this.inflightAgentRunId };
+    }
+    if (this.starting) return this.starting;
+    if (!this.runHandler) throw new Error('Orbit agent runner is not configured');
+
+    this.starting = this.startRun(trigger).finally(() => {
+      this.starting = null;
     });
-    return this.runningPromise;
+    return this.starting;
+  }
+
+  private async startRun(trigger: 'manual' | 'scheduled'): Promise<{ projectId: string; agentRunId: string }> {
+    if (!this.runHandler) throw new Error('Orbit agent runner is not configured');
+
+    const startedAt = new Date().toISOString();
+    const runId = `orbit-${randomUUID()}`;
+    const prompt = buildOrbitPrompt(new Date(startedAt));
+    const handlerStart = await this.runHandler({ runId, trigger, startedAt, prompt });
+
+    this.inflightProjectId = handlerStart.projectId;
+    this.inflightAgentRunId = handlerStart.agentRunId;
+    this.inflight = (async () => {
+      try {
+        const agentResult = await handlerStart.completion;
+        const completedAt = new Date().toISOString();
+        const base = {
+          id: runId,
+          startedAt,
+          completedAt,
+          trigger,
+          connectorsChecked: 0,
+          connectorsSucceeded: agentResult.status === 'succeeded' ? 1 : 0,
+          connectorsFailed: agentResult.status === 'failed' ? 1 : 0,
+          connectorsSkipped: agentResult.status === 'canceled' ? 1 : 0,
+          agentRunId: agentResult.agentRunId,
+          ...(agentResult.artifactId === undefined ? {} : { artifactId: agentResult.artifactId }),
+          ...(agentResult.artifactProjectId === undefined ? {} : { artifactProjectId: agentResult.artifactProjectId }),
+          results: [{
+            connectorId: 'agent-runtime',
+            connectorName: 'Orbit Agent',
+            status: agentResult.status === 'succeeded' ? 'succeeded' : agentResult.status === 'failed' ? 'failed' : 'skipped',
+            summary: agentResult.summary ?? `Agent run ${agentResult.status}.`,
+          } satisfies OrbitConnectorRunResult],
+        };
+        const summary: OrbitActivitySummary = {
+          ...base,
+          markdown: renderMarkdown(base),
+        };
+        await writeLastSummary(this.dataDir, summary);
+        return summary;
+      } finally {
+        this.inflight = null;
+        this.inflightProjectId = null;
+        this.inflightAgentRunId = null;
+        this.reschedule();
+      }
+    })();
+    this.inflight.catch((error) => {
+      console.warn('[orbit] Run failed:', error);
+    });
+
+    return { projectId: handlerStart.projectId, agentRunId: handlerStart.agentRunId };
   }
 
   stop(): void {
@@ -210,44 +292,9 @@ export class OrbitService {
     const next = nextDailyRunAt(this.config.time);
     this.nextRunAtValue = next;
     this.timer = setTimeout(() => {
-      void this.run('scheduled').catch((error) => {
+      void this.start('scheduled').catch((error) => {
         console.warn('[orbit] Scheduled run failed:', error);
       });
     }, Math.max(0, next.getTime() - Date.now()));
-  }
-
-  private async runOnce(trigger: 'manual' | 'scheduled'): Promise<OrbitActivitySummary> {
-    const startedAt = new Date().toISOString();
-    const runId = `orbit-${randomUUID()}`;
-    const prompt = buildOrbitPrompt(new Date(startedAt));
-    if (!this.runHandler) throw new Error('Orbit agent runner is not configured');
-    const agentResult = await this.runHandler({ runId, trigger, startedAt, prompt });
-
-    const completedAt = new Date().toISOString();
-    const base = {
-      id: runId,
-      startedAt,
-      completedAt,
-      trigger,
-      connectorsChecked: 0,
-      connectorsSucceeded: agentResult.status === 'succeeded' ? 1 : 0,
-      connectorsFailed: agentResult.status === 'failed' ? 1 : 0,
-      connectorsSkipped: agentResult.status === 'canceled' ? 1 : 0,
-      agentRunId: agentResult.agentRunId,
-      ...(agentResult.artifactId === undefined ? {} : { artifactId: agentResult.artifactId }),
-      ...(agentResult.artifactProjectId === undefined ? {} : { artifactProjectId: agentResult.artifactProjectId }),
-      results: [{
-        connectorId: 'agent-runtime',
-        connectorName: 'Orbit Agent',
-        status: agentResult.status === 'succeeded' ? 'succeeded' : agentResult.status === 'failed' ? 'failed' : 'skipped',
-        summary: agentResult.summary ?? `Agent run ${agentResult.status}.`,
-      } satisfies OrbitConnectorRunResult],
-    };
-    const summary: OrbitActivitySummary = {
-      ...base,
-      markdown: renderMarkdown(base),
-    };
-    await writeLastSummary(this.dataDir, summary);
-    return summary;
   }
 }

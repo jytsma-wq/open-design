@@ -379,10 +379,13 @@ export function ProjectView({
       for (const textBuffer of reattachTextBuffersRef.current) textBuffer.cancel();
       reattachTextBuffersRef.current.clear();
       for (const controller of reattachControllersRef.current.values()) {
+        if (abortRef.current === controller) abortRef.current = null;
         controller.abort();
       }
       for (const controller of reattachCancelControllersRef.current.values()) {
-        controller.abort();
+        // Route changes should only detach the browser-side SSE listener.
+        // Aborting this signal maps to POST /cancel, so leave the daemon run alive.
+        if (cancelRef.current === controller) cancelRef.current = null;
       }
       reattachControllersRef.current.clear();
       reattachCancelControllersRef.current.clear();

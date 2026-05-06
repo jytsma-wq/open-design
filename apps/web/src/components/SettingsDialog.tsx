@@ -1838,20 +1838,15 @@ interface OrbitRunSummary {
   connectorsSkipped: number;
   artifactId?: string | null;
   artifactProjectId?: string | null;
-  /** Identifier of the daemon run that produced this summary. Useful for
-   *  log correlation; the live conversation lives at /projects/orbit. */
+  /** Identifier of the daemon run that produced this summary. Useful for log correlation. */
   agentRunId?: string | null;
   markdown: string;
 }
 
-/** Well-known project id the daemon uses for every Orbit run. Mirrors the
- *  ORBIT_PROJECT_ID constant in apps/daemon/src/orbit.ts. Kept here so we
- *  can build navigation URLs without round-tripping through the run
- *  response — manual runs hit /api/orbit/run synchronously, but the agent
- *  conversation gets created on the daemon side a moment after the POST
- *  is dispatched, so we navigate optimistically and let ProjectView's
- *  SSE reattach pick the in-flight run up. */
-const ORBIT_PROJECT_ID = 'orbit';
+interface OrbitRunStartResponse {
+  projectId: string;
+  agentRunId: string;
+}
 
 interface OrbitStatusResponse {
   running?: boolean;
@@ -1880,8 +1875,8 @@ function OrbitSection({
 }: {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
-  /** Called right before navigating to /projects/orbit so the parent dialog
-   *  can persist any unsaved Orbit edits and close itself. */
+  /** Called right before navigating to the generated Orbit project so the
+   *  parent dialog can persist any unsaved Orbit edits and close itself. */
   onLeaveForOrbitProject: () => void;
 }) {
   const orbit = cfg.orbit ?? DEFAULT_ORBIT;
@@ -1889,10 +1884,8 @@ function OrbitSection({
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; message: string } | null>(null);
   const [copied, setCopied] = useState(false);
-  // Once the user clicks Generate we close Settings and navigate away. The
-  // /api/orbit/run request keeps streaming in the background — its eventual
-  // resolution must not call setState on this unmounted component. The ref
-  // lets late-arriving handlers no-op without React warnings. */
+  // Once the user clicks Generate we close Settings and navigate away. The ref
+  // lets late-arriving handlers no-op without React warnings.
   const isMountedRef = useRef(true);
   useEffect(() => () => {
     isMountedRef.current = false;
@@ -1925,30 +1918,18 @@ function OrbitSection({
     setRunning(true);
     setNotice(null);
 
-    // Fire the request without awaiting. The daemon's POST handler doesn't
-    // return until the entire agent run finishes, so awaiting here would
-    // defeat the "watch realtime output" goal. Instead we kick the run off,
-    // navigate to the conversation view immediately, and let ProjectView's
-    // existing SSE reattach pick the in-flight run up.
     void (async () => {
       try {
         const response = await fetch('/api/orbit/run', { method: 'POST' });
         if (!response.ok) throw new Error('Orbit run failed');
-        const payload = await response.json() as { summary?: OrbitRunSummary };
-        // The component is usually unmounted by the time this resolves
-        // (we navigate on the same tick). Guard every setState so the
-        // late response just no-ops in that case.
-        if (!isMountedRef.current) return;
-        setStatus((curr) => ({
-          ...(curr ?? {}),
-          running: false,
-          lastRun: payload.summary ?? curr?.lastRun ?? null,
-        }));
-        setNotice({
-          kind: 'success',
-          message: payload.summary?.artifactId
-            ? 'Orbit summary generated as a live artifact.'
-            : 'Orbit summary generated.',
+        const payload = await response.json() as OrbitRunStartResponse;
+        if (!payload.projectId) throw new Error('Orbit run did not return a project');
+
+        onLeaveForOrbitProject();
+        navigateRoute({
+          kind: 'project',
+          projectId: payload.projectId,
+          fileName: null,
         });
       } catch {
         if (!isMountedRef.current) return;
@@ -1962,20 +1943,6 @@ function OrbitSection({
         void refreshStatus();
       }
     })();
-
-    // Persist any pending Orbit edits + close Settings, then route to the
-    // Orbit project view. The conversation row is created on the daemon
-    // side as part of the POST handler; by the time ProjectView mounts and
-    // fetches its conversation list, that row is virtually always present.
-    // If it isn't yet (very fast machines), the project's SSE channel will
-    // still receive its messages once it is, so the realtime output shows
-    // up either way.
-    onLeaveForOrbitProject();
-    navigateRoute({
-      kind: 'project',
-      projectId: ORBIT_PROJECT_ID,
-      fileName: null,
-    });
   };
 
   const lastRun = status?.lastRun ?? null;
