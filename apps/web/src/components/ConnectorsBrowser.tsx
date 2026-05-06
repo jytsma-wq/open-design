@@ -67,6 +67,33 @@ interface ConnectorsBrowserProps {
  * actually opens the surface, and rehydrates statuses on window focus and
  * OAuth callback messages.
  */
+/**
+ * Provider tab definition. Today this is just Composio, but the surface is
+ * structured as a list-of-tabs because the next provider integration (e.g.
+ * a self-hosted MCP registry) is expected to drop in here without rework.
+ *
+ * `match` decides whether a given catalog entry belongs to this provider:
+ * the entry's `auth.provider` is the source of truth, falling back to the
+ * lowercased display `provider` for catalog rows that don't carry an auth
+ * payload yet.
+ */
+const PROVIDER_TABS: ReadonlyArray<{
+  id: string;
+  label: string;
+  match: (connector: ConnectorDetail) => boolean;
+}> = [
+  {
+    id: 'composio',
+    label: 'Composio',
+    match: (connector) => {
+      const provider = connector.auth?.provider ?? connector.provider.toLowerCase();
+      return provider === 'composio';
+    },
+  },
+];
+
+const DEFAULT_PROVIDER_TAB_ID = 'composio';
+
 export function ConnectorsBrowser({
   composioConfigured,
   onFocusComposioCredentials,
@@ -82,6 +109,7 @@ export function ConnectorsBrowser({
   } | null>(null);
   const [detailConnectorId, setDetailConnectorId] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
+  const [selectedProvider, setSelectedProvider] = useState<string>(DEFAULT_PROVIDER_TAB_ID);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const reloadConnectorStatuses = useCallback(async () => {
@@ -167,10 +195,20 @@ export function ConnectorsBrowser({
 
   // Filter and rank connectors by user-visible fields. Exact/prefix matches
   // on connector name/provider are strongest; broad description matches stay
-  // searchable but are down-ranked.
+  // searchable but are down-ranked. The provider tab restricts the catalog
+  // to a single backing provider before search runs so result rankings stay
+  // tab-local.
+  const providerScopedConnectors = useMemo(() => {
+    const tab =
+      PROVIDER_TABS.find((p) => p.id === selectedProvider) ??
+      PROVIDER_TABS.find((p) => p.id === DEFAULT_PROVIDER_TAB_ID);
+    if (!tab) return connectors;
+    return connectors.filter((connector) => tab.match(connector));
+  }, [connectors, selectedProvider]);
+
   const filteredConnectors = useMemo(() => {
-    return sortConnectorsForSearch(connectors, filter);
-  }, [connectors, filter]);
+    return sortConnectorsForSearch(providerScopedConnectors, filter);
+  }, [providerScopedConnectors, filter]);
 
   const hasQuery = filter.trim().length > 0;
   const hasNoResults = hasQuery && filteredConnectors.length === 0;
@@ -209,6 +247,28 @@ export function ConnectorsBrowser({
           </div>
         </div>
         <div className="toolbar-right">
+          <div
+            className="connectors-provider-tabs"
+            role="tablist"
+            aria-label="Connector provider"
+          >
+            {PROVIDER_TABS.map((provider) => {
+              const active = provider.id === selectedProvider;
+              return (
+                <button
+                  key={provider.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  className={`connectors-provider-tab${active ? ' is-active' : ''}`}
+                  onClick={() => setSelectedProvider(provider.id)}
+                  data-testid={`connectors-provider-tab-${provider.id}`}
+                >
+                  {provider.label}
+                </button>
+              );
+            })}
+          </div>
           <div className="toolbar-search connectors-search">
             <span className="search-icon" aria-hidden>
               <Icon name="search" size={13} />
@@ -408,68 +468,67 @@ function ConnectorCard({
           <h3 className="connector-card-title">{connector.name}</h3>
           <div className="connector-meta">
             <span className="connector-meta-item">{connector.category}</span>
-            <span className="connector-meta-dot" aria-hidden>·</span>
             {showToolsBadge ? (
-              <span className="connector-tools-badge is-ready" title={toolsBadgeLabel}>
-                <Icon name="settings" size={10} />
-                <span>{toolsBadgeLabel}</span>
-              </span>
+              <>
+                <span className="connector-meta-dot" aria-hidden>·</span>
+                <span className="connector-tools-badge is-ready" title={toolsBadgeLabel}>
+                  <span>{toolsBadgeLabel}</span>
+                </span>
+              </>
             ) : null}
           </div>
         </div>
-        {isConnected ? (
-          <span
-            className={`connector-status status-${connector.status}`}
-            aria-label={statusLabel(connector.status, t)}
-          >
-            <span className="connector-status-dot" aria-hidden />
-            {statusLabel(connector.status, t)}
-          </span>
-        ) : connector.status === 'error' || connector.status === 'disabled' ? (
-          <span className={`connector-status status-${connector.status}`}>
-            {statusLabel(connector.status, t)}
-          </span>
-        ) : null}
-      </div>
-      {connector.description ? (
-        <p className="connector-description">{connector.description}</p>
-      ) : null}
-      <div className="connector-actions">
-        {isConnected ? (
-          <button
-            type="button"
-            className={`ghost connector-action is-disconnect${isDisconnecting ? ' is-loading' : ''}`}
-            disabled={!canDisconnect}
-            aria-busy={isDisconnecting || undefined}
-            tabIndex={disabled ? -1 : undefined}
-            onMouseDown={stop}
-            onKeyDown={stop}
-            onClick={(e) => {
-              stop(e);
-              onDisconnect(connector.id);
-            }}
-          >
-            {isDisconnecting ? <Icon name="spinner" size={12} /> : null}
-            <span>{t('connectors.disconnect')}</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            className={`primary connector-action is-connect${isConnecting ? ' is-loading' : ''}`}
-            disabled={!canConnect}
-            aria-busy={isConnecting || undefined}
-            tabIndex={disabled ? -1 : undefined}
-            onMouseDown={stop}
-            onKeyDown={stop}
-            onClick={(e) => {
-              stop(e);
-              onConnect(connector.id);
-            }}
-          >
-            {isConnecting ? <Icon name="spinner" size={12} /> : null}
-            <span>{t('connectors.connect')}</span>
-          </button>
-        )}
+        <div className="connector-card-actions">
+          {isConnected ? (
+            <span
+              className={`connector-status-dot status-${connector.status}`}
+              aria-label={statusLabel(connector.status, t)}
+              title={statusLabel(connector.status, t)}
+            />
+          ) : null}
+          {isConnected ? (
+            <button
+              type="button"
+              className={`icon-only connector-action is-disconnect${isDisconnecting ? ' is-loading' : ''}`}
+              disabled={!canDisconnect}
+              aria-busy={isDisconnecting || undefined}
+              aria-label={t('connectors.disconnect')}
+              title={t('connectors.disconnect')}
+              tabIndex={disabled ? -1 : undefined}
+              onMouseDown={stop}
+              onKeyDown={stop}
+              onClick={(e) => {
+                stop(e);
+                onDisconnect(connector.id);
+              }}
+            >
+              <Icon name={isDisconnecting ? 'spinner' : 'close'} size={12} />
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`icon-only connector-action is-connect${isConnecting ? ' is-loading' : ''}`}
+              disabled={!canConnect}
+              aria-busy={isConnecting || undefined}
+              aria-label={t('connectors.connect')}
+              title={t('connectors.connect')}
+              tabIndex={disabled ? -1 : undefined}
+              onMouseDown={stop}
+              onKeyDown={stop}
+              onClick={(e) => {
+                stop(e);
+                onConnect(connector.id);
+              }}
+            >
+              <Icon name={isConnecting ? 'spinner' : 'plus'} size={12} />
+            </button>
+          )}
+          {connector.status === 'error' || connector.status === 'disabled' ? (
+            <span className={`connector-status-pill status-${connector.status}`}>
+              {statusLabel(connector.status, t)}
+            </span>
+          ) : null}
+        </div>
       </div>
     </article>
   );

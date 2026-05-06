@@ -148,16 +148,18 @@ test('live artifact empty connector CTA opens the gated connector setup path', a
   await page.getByTestId('new-project-tab-live-artifact').click();
   await expect(page.getByTestId('new-project-connectors')).toBeVisible();
 
-  // The empty CTA now opens Settings → Connectors directly, where the gate
-  // and the catalog live alongside the Composio API key field.
+  // The empty CTA now opens Settings → Connectors directly. The Composio API
+  // key field sits at the top of the section; the catalog (and its gate)
+  // sits below it.
   await page.getByTestId('new-project-connectors-empty').click();
   const settingsDialog = page.getByRole('dialog');
   await expect(settingsDialog).toBeVisible();
   await expect(settingsDialog.getByRole('heading', { name: 'Connectors' })).toBeVisible();
+  await expect(settingsDialog.getByPlaceholder('Paste Composio API key')).toBeVisible();
   await expect(settingsDialog.getByTestId('connector-gate')).toBeVisible();
 
-  // Gate CTA scrolls to + focuses the Composio credentials field within the
-  // same surface (no second navigation, no second dialog).
+  // Gate CTA scrolls back up to + focuses the credentials field above the
+  // catalog (no second navigation, no second dialog).
   await settingsDialog.getByTestId('connector-gate-action').click();
   await expect(settingsDialog.getByPlaceholder('Paste Composio API key')).toBeFocused();
 });
