@@ -4537,6 +4537,7 @@ button.connector-action.is-loading {
   /* Cap the masked grid's height so the gate's centered card stays in the
      visible portion of the settings dialog without forcing the modal body
      to scroll past it. The grid below is blurred and intentionally clipped. */
+  min-height: clamp(320px, 45vh, 420px);
   max-height: clamp(360px, 56vh, 560px);
   overflow: hidden;
   border-radius: var(--radius);
@@ -4675,6 +4676,7 @@ button.connector-action.is-loading {
 .connector-gate {
   position: absolute;
   inset: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4686,6 +4688,7 @@ button.connector-action.is-loading {
   -webkit-backdrop-filter: blur(6px);
   border-radius: var(--radius);
   animation: connector-gate-fade 220ms ease-out;
+  pointer-events: auto;
 }
 @keyframes connector-gate-fade {
   from { opacity: 0; transform: translateY(4px); }
