@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 
 const STORAGE_KEY = 'open-design:config';
 
@@ -148,37 +148,47 @@ test('live artifact empty connector CTA opens the gated connector setup path', a
   await page.getByTestId('new-project-tab-live-artifact').click();
   await expect(page.getByTestId('new-project-connectors')).toBeVisible();
 
+  // The empty CTA now opens Settings → Connectors directly, where the gate
+  // and the catalog live alongside the Composio API key field.
   await page.getByTestId('new-project-connectors-empty').click();
-  await expect(page.getByTestId('entry-tab-connectors')).toHaveAttribute('aria-selected', 'true');
-  await expect(page.getByTestId('connector-gate')).toBeVisible();
-
-  await page.getByTestId('connector-gate-action').click();
   const settingsDialog = page.getByRole('dialog');
   await expect(settingsDialog).toBeVisible();
   await expect(settingsDialog.getByRole('heading', { name: 'Connectors' })).toBeVisible();
-  await expect(settingsDialog.getByPlaceholder('Paste Composio API key')).toBeVisible();
+  await expect(settingsDialog.getByTestId('connector-gate')).toBeVisible();
+
+  // Gate CTA scrolls to + focuses the Composio credentials field within the
+  // same surface (no second navigation, no second dialog).
+  await settingsDialog.getByTestId('connector-gate-action').click();
+  await expect(settingsDialog.getByPlaceholder('Paste Composio API key')).toBeFocused();
 });
 
 test('connectors search supports empty results and keyboard-closeable details', async ({ page }) => {
   await routeConnectors(page, CONNECTORS);
 
-  await gotoEntryHome(page);
-  await page.getByTestId('entry-tab-connectors').click();
-  await expect(page.getByTestId('connector-grid-wrap')).toBeVisible();
+  await page.goto('/');
+  // Connector cards + search now live under Settings → Connectors. Open the
+  // settings dialog via the entry sidebar's "Configure execution mode" pill
+  // and switch to the Connectors section before exercising the
+  // search/empty/details flow.
+  await page.getByRole('button', { name: 'Configure execution mode' }).click();
+  const settingsDialog = page.getByRole('dialog');
+  await expect(settingsDialog).toBeVisible();
+  await settingsDialog.getByRole('button', { name: /^Connectors\b/ }).click();
+  await expect(settingsDialog.getByTestId('connector-grid-wrap')).toBeVisible();
 
-  const search = page.getByTestId('connectors-search-input');
+  const search = settingsDialog.getByTestId('connectors-search-input');
   await search.fill('git');
-  await expect(connectorCard(page, 'github')).toBeVisible();
-  await expect(connectorCard(page, 'slack')).toHaveCount(0);
+  await expect(connectorCard(settingsDialog, 'github')).toBeVisible();
+  await expect(connectorCard(settingsDialog, 'slack')).toHaveCount(0);
 
   await search.fill('missing connector');
-  await expect(page.getByTestId('connectors-empty')).toBeVisible();
+  await expect(settingsDialog.getByTestId('connectors-empty')).toBeVisible();
   await search.press('Escape');
-  await expect(page.getByTestId('connectors-empty')).toHaveCount(0);
-  await expect(connectorCard(page, 'github')).toBeVisible();
-  await expect(connectorCard(page, 'slack')).toBeVisible();
+  await expect(settingsDialog.getByTestId('connectors-empty')).toHaveCount(0);
+  await expect(connectorCard(settingsDialog, 'github')).toBeVisible();
+  await expect(connectorCard(settingsDialog, 'slack')).toBeVisible();
 
-  await connectorCard(page, 'github').click();
+  await connectorCard(settingsDialog, 'github').click();
   await expect(page.getByTestId('connector-drawer')).toBeVisible();
   await expect(page.getByTestId('connector-drawer')).toContainText('List issues');
   await page.keyboard.press('Escape');
@@ -214,20 +224,21 @@ test('saving a Composio key from Settings unlocks the connectors gate immediatel
   });
 
   await gotoEntryHome(page);
-  await page.getByTestId('entry-tab-connectors').click();
-  await expect(page.getByTestId('connector-gate')).toBeVisible();
-  await expect(page.getByTestId('connectors-search-input')).toBeDisabled();
-
-  await page.getByTestId('connector-gate-action').click();
+  await page.getByRole('button', { name: 'Configure execution mode' }).click();
   const settingsDialog = page.getByRole('dialog');
   await expect(settingsDialog).toBeVisible();
+  await settingsDialog.getByRole('button', { name: /^Connectors\b/ }).click();
+  await expect(settingsDialog.getByTestId('connector-gate')).toBeVisible();
+  await expect(settingsDialog.getByTestId('connectors-search-input')).toBeDisabled();
+
+  await settingsDialog.getByTestId('connector-gate-action').click();
   await settingsDialog.getByPlaceholder('Paste Composio API key').fill('cmp-secret-1234');
   await settingsDialog.getByRole('button', { name: 'Save', exact: true }).click();
 
   expect(savedComposioBody).toEqual({ apiKey: 'cmp-secret-1234' });
-  await expect(page.getByTestId('connector-gate')).toHaveCount(0);
-  await expect(page.getByTestId('connectors-search-input')).toBeEnabled();
-  await expect(connectorCard(page, 'github')).toBeVisible();
+  await expect(settingsDialog.getByTestId('connector-gate')).toHaveCount(0);
+  await expect(settingsDialog.getByTestId('connectors-search-input')).toBeEnabled();
+  await expect(connectorCard(settingsDialog, 'github')).toBeVisible();
 
   const savedConfig = await page.evaluate((key) => {
     const raw = window.localStorage.getItem(key);
@@ -271,8 +282,8 @@ async function gotoEntryHome(page: Page) {
   await expect(page.getByTestId('new-project-panel')).toBeVisible();
 }
 
-function connectorCard(page: Page, id: string) {
-  return page.locator(`article.connector-card[data-connector-id="${id}"]`);
+function connectorCard(scope: Page | Locator, id: string) {
+  return scope.locator(`article.connector-card[data-connector-id="${id}"]`);
 }
 
 async function fetchCurrentProject(page: Page) {

@@ -1325,6 +1325,14 @@ code {
 }
 
 .settings-section { display: flex; flex-direction: column; gap: 12px; }
+.settings-section-connectors { gap: 16px; }
+.settings-section-connectors > .connectors-panel-embedded {
+  /* Carve a touch of separation from the section head and the credential
+     field that follows the catalog. */
+  margin-top: 4px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border-soft);
+}
 .settings-rescan-btn {
   display: inline-flex;
   align-items: center;
@@ -4443,6 +4451,55 @@ button.connector-action.is-loading {
 }
 .connector-card.is-locked {
   cursor: not-allowed;
+}
+
+/* Embedded inside Settings → Connectors. The section-head already shows the
+   "Connectors" heading + hint, so suppress the inner panel heading and let
+   the toolbar collapse to just the search input. The masked gate keeps its
+   absolute positioning relative to .connector-grid-wrap (already set), but
+   we cap its height inside the modal so the gate stays visible without
+   blowing the dialog out vertically. */
+.tab-panel.connectors-panel.connectors-panel-embedded {
+  gap: 14px;
+}
+.connectors-panel-embedded .tab-panel-toolbar {
+  justify-content: flex-end;
+  margin-top: -4px;
+}
+.connectors-panel-embedded .toolbar-left.connectors-heading {
+  display: none;
+}
+.connectors-panel-embedded .toolbar-right {
+  flex: 1 1 auto;
+  justify-content: stretch;
+}
+.connectors-panel-embedded .tab-panel-toolbar .toolbar-search.connectors-search {
+  flex: 1 1 100%;
+  width: 100%;
+  max-width: none;
+}
+.connectors-panel-embedded .connector-grid-wrap.is-masked {
+  /* Cap the masked grid's height so the gate's centered card stays in the
+     visible portion of the settings dialog without forcing the modal body
+     to scroll past it. The grid below is blurred and intentionally clipped. */
+  max-height: clamp(360px, 56vh, 560px);
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+.connectors-panel-embedded .connector-grid-wrap.is-masked .connector-grid {
+  max-height: 100%;
+  overflow: hidden;
+}
+/* Tighten card density inside the dialog — the modal column is narrower than
+   the entry tab, so use slightly smaller minmax tracks to keep two cards per
+   row at common widths. */
+.connectors-panel-embedded .connector-grid {
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 12px;
+}
+.connectors-panel-embedded .connector-card {
+  min-height: 156px;
+  padding: 14px 14px 12px;
 }
 .connector-gate {
   position: absolute;

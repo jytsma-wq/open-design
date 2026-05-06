@@ -667,8 +667,8 @@ function FidelityPicker({
    - Lists configured connectors as compact chips so the user can
      see at a glance what data sources this artifact can pull from.
    - When no connector is configured (or the list hasn't loaded yet
-     and ended up empty), shows a guidance card that, on click, pops
-     the entry-tab-connectors tab in the main view.
+     and ended up empty), shows a guidance card that, on click, opens
+     the Settings → Connectors surface (the new home of the catalog).
    ============================================================ */
 function ConnectorsSection({
   connectors,
