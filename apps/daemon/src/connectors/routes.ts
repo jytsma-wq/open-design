@@ -5,6 +5,7 @@ import type { Express, Request, RequestHandler, Response } from 'express';
 import type { ToolTokenGrant } from '../tool-tokens.js';
 import { validateBoundedJsonObject } from '../live-artifacts/schema.js';
 import { executeConnectorTool, listConnectorTools } from '../tools/connectors.js';
+import type { ConnectorToolUseCase } from './catalog.js';
 import { connectorService, ConnectorService, ConnectorServiceError } from './service.js';
 
 type ConnectorApiErrorCode =
@@ -54,6 +55,12 @@ function isLoopbackHostname(hostname: string): boolean {
   if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
   if (normalized.startsWith('::ffff:')) return isLoopbackHostname(normalized.slice('::ffff:'.length));
   return net.isIP(normalized) === 4 && (normalized === '127.0.0.1' || normalized.startsWith('127.'));
+}
+
+function parseConnectorToolUseCase(value: unknown): ConnectorToolUseCase | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'personal_daily_digest') return value;
+  return undefined;
 }
 
 function connectorCallbackUrl(req: Request): string {
@@ -430,7 +437,13 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
         options.sendApiError(res, 500, 'CONNECTOR_EXECUTION_FAILED', 'connector tool routes are not configured');
         return;
       }
-      res.json({ connectors: await listConnectorTools({ grant, projectsRoot: options.projectsRoot, service }) });
+      const rawUseCase = typeof req.query.useCase === 'string' ? req.query.useCase : undefined;
+      const useCase = parseConnectorToolUseCase(rawUseCase);
+      if (rawUseCase !== undefined && useCase === undefined) {
+        options.sendApiError(res, 400, 'BAD_REQUEST', 'useCase must be personal_daily_digest');
+        return;
+      }
+      res.json({ connectors: await listConnectorTools({ grant, projectsRoot: options.projectsRoot, service, ...(useCase === undefined ? {} : { useCase }) }) });
     } catch (err) {
       sendConnectorRouteError(res, err, options.sendApiError);
     }

@@ -1,6 +1,6 @@
 import type { ToolTokenGrant } from '../tool-tokens.js';
 
-import { classifyConnectorToolSafety, connectorDefinitionToDetail, type ConnectorCatalogDefinition, type ConnectorToolDetail, type ConnectorToolSafety } from '../connectors/catalog.js';
+import { classifyConnectorToolSafety, connectorDefinitionToDetail, type ConnectorCatalogDefinition, type ConnectorToolDetail, type ConnectorToolSafety, type ConnectorToolUseCase } from '../connectors/catalog.js';
 import { connectorService, ConnectorService, type ConnectorExecuteRequest } from '../connectors/service.js';
 
 export interface ConnectorToolContext {
@@ -48,7 +48,12 @@ function isAgentPreviewListableTool(definition: ConnectorCatalogDefinition, tool
   return runtimeSafety.sideEffect === 'read' && effectiveApproval === 'auto';
 }
 
-export async function listConnectorTools(context: ConnectorToolContext): Promise<Awaited<ReturnType<ConnectorService['listConnectors']>>> {
+function matchesConnectorToolUseCase(tool: ConnectorToolDetail, useCase: ConnectorToolUseCase | undefined): boolean {
+  if (useCase === undefined) return true;
+  return tool.curation?.useCases?.includes(useCase) ?? false;
+}
+
+export async function listConnectorTools(context: ConnectorToolContext & { useCase?: ConnectorToolUseCase }): Promise<Awaited<ReturnType<ConnectorService['listConnectors']>>> {
   const service = context.service ?? connectorService;
   // Agent-facing tool discovery sits on the hot path for unattended Orbit
   // runs. Do not call provider discovery here: Composio toolkit discovery can
@@ -85,6 +90,7 @@ export async function listConnectorTools(context: ConnectorToolContext): Promise
       ...connector,
       tools: connector.tools
         .filter((tool) => isAgentPreviewListableTool(definition, tool))
+        .filter((tool) => matchesConnectorToolUseCase(tool, context.useCase))
         .sort((left, right) => {
           const leftReadOnly = left.safety.sideEffect === 'read' && left.safety.approval === 'auto';
           const rightReadOnly = right.safety.sideEffect === 'read' && right.safety.approval === 'auto';

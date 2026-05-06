@@ -354,10 +354,9 @@ describe('connector routes', () => {
 
     expect(connect.status).toBe(200);
     expect(connect.body.connector).toMatchObject({ id: 'slack', status: 'connected', auth: { configured: true } });
-    expect(connect.body.connector.tools).toEqual(expect.arrayContaining([
+    expect(connect.body.connector.tools).toEqual([
       expect.objectContaining({ name: 'slack.slack_list_channels' }),
-      expect.objectContaining({ name: 'slack.slack_send_message' }),
-    ]));
+    ]);
     expect(lastComposioAuthConfigRequest).toEqual({
       toolkit: { slug: 'SLACK' },
       auth_config: { type: 'use_composio_managed_auth' },
@@ -523,6 +522,51 @@ describe('connector routes', () => {
       expect.objectContaining({ name: 'github.github_search_repositories', safety: expect.objectContaining({ sideEffect: 'read', approval: 'auto' }) }),
     ]));
     expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 });
+  });
+
+  it('filters connected connector tools by curated use case and returns curation metadata', async () => {
+    await new Promise((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve(undefined)));
+    });
+    mockComposioFetch({
+      authConfigs: [{ id: 'ac_slack', status: 'ENABLED', toolkit: { slug: 'slack' } }],
+      linkResponse: { connected_account_id: 'ca_slack', status: 'ACTIVE', account_label: 'slack@example.com' },
+    });
+    composioConnectorProvider.clearDiscoveryCache();
+    const started = await startServer({ port: 0, returnServer: true });
+    server = started.server;
+    baseUrl = started.url;
+    await jsonFetch(`${baseUrl}/api/connectors/composio/config`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'cmp_test' }),
+    });
+    await jsonFetch(`${baseUrl}/api/connectors/slack/connect`, { method: 'POST' });
+    const token = mintConnectorToolToken();
+
+    const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list?useCase=personal_daily_digest`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.connectors.map((connector) => connector.id)).toEqual(['slack']);
+    expect(response.body.connectors[0].tools).toEqual([
+      expect.objectContaining({
+        name: 'slack.slack_list_channels',
+        curation: expect.objectContaining({ useCases: ['personal_daily_digest'] }),
+      }),
+    ]);
+  });
+
+  it('rejects invalid connector tool useCase filters', async () => {
+    const token = mintConnectorToolToken();
+
+    const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list?useCase=invalid`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.code).toBe('BAD_REQUEST');
   });
 
   it('executes connected Composio tools through run-scoped tool auth', async () => {

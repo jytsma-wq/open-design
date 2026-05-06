@@ -525,7 +525,7 @@ export class ConnectorService {
   }
 
   listFastDefinitions(): ConnectorCatalogDefinition[] {
-    return getStaticComposioCatalogDefinitions();
+    return composioConnectorProvider.getFastDefinitions();
   }
 
   async getDefinition(connectorId: string, signal?: AbortSignal): Promise<ConnectorCatalogDefinition | undefined> {
@@ -554,7 +554,9 @@ export class ConnectorService {
   async listConnectorDiscovery(options: { refresh?: boolean; signal?: AbortSignal } = {}): Promise<ConnectorDiscoveryResult> {
     if (options.refresh) composioConnectorProvider.clearDiscoveryCache();
     return {
-      connectors: (await this.listDefinitions(options.signal)).map((definition) => this.toDetail(definition)),
+      connectors: ((options.refresh
+        ? await composioConnectorProvider.refreshCatalog(options.signal)
+        : await this.listDefinitions(options.signal))).map((definition) => this.toDetail(definition)),
       meta: {
         provider: 'composio',
         ...(options.refresh ? { refreshRequested: true } : {}),

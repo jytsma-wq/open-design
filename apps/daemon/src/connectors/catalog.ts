@@ -3,11 +3,17 @@ import type { BoundedJsonObject, BoundedJsonValue } from '../live-artifacts/sche
 export type ConnectorStatus = 'available' | 'connected' | 'error' | 'disabled';
 export type ConnectorToolSideEffect = 'read' | 'write' | 'destructive' | 'unknown';
 export type ConnectorToolApproval = 'auto' | 'confirm' | 'disabled';
+export type ConnectorToolUseCase = 'personal_daily_digest';
 
 export interface ConnectorToolSafety {
   sideEffect: ConnectorToolSideEffect;
   approval: ConnectorToolApproval;
   reason: string;
+}
+
+export interface ConnectorToolCuration {
+  useCases?: ConnectorToolUseCase[];
+  reason?: string;
 }
 
 export interface ConnectorToolDetail {
@@ -18,6 +24,7 @@ export interface ConnectorToolDetail {
   outputSchemaJson?: BoundedJsonObject;
   safety: ConnectorToolSafety;
   refreshEligible: boolean;
+  curation?: ConnectorToolCuration;
 }
 
 export interface ConnectorCatalogToolDefinition extends ConnectorToolDetail {
@@ -151,10 +158,19 @@ function toolDefinitionToDetail(tool: ConnectorCatalogToolDefinition): Connector
     ...(tool.outputSchemaJson === undefined ? {} : { outputSchemaJson: cloneBoundedJsonObject(tool.outputSchemaJson) }),
     safety: { ...tool.safety },
     refreshEligible: tool.refreshEligible,
+    ...(tool.curation === undefined
+      ? {}
+      : { curation: { ...(tool.curation.useCases === undefined ? {} : { useCases: [...tool.curation.useCases] }), ...(tool.curation.reason === undefined ? {} : { reason: tool.curation.reason }) } }),
   };
 }
 
+function isVisibleConnectorTool(tool: Pick<ConnectorCatalogToolDefinition, 'safety'>): boolean {
+  return tool.safety.sideEffect === 'read';
+}
+
 export function connectorDefinitionToDetail(definition: ConnectorCatalogDefinition): ConnectorDetail {
+  const visibleTools = definition.tools.filter((tool) => isVisibleConnectorTool(tool));
+  const visibleToolNames = new Set(visibleTools.map((tool) => tool.name));
   return {
     id: definition.id,
     name: definition.name,
@@ -162,8 +178,10 @@ export function connectorDefinitionToDetail(definition: ConnectorCatalogDefiniti
     category: definition.category,
     ...(definition.description === undefined ? {} : { description: definition.description }),
     status: definition.disabled ? 'disabled' : 'available',
-    tools: definition.tools.map((tool) => toolDefinitionToDetail(tool)),
-    ...(definition.featuredToolNames === undefined ? {} : { featuredToolNames: [...definition.featuredToolNames] }),
+    tools: visibleTools.map((tool) => toolDefinitionToDetail(tool)),
+    ...(definition.featuredToolNames === undefined
+      ? {}
+      : { featuredToolNames: definition.featuredToolNames.filter((toolName) => visibleToolNames.has(toolName)) }),
     ...(definition.minimumApproval === undefined ? {} : { minimumApproval: definition.minimumApproval }),
     auth: {
       provider: definition.authentication ?? (definition.provider === 'open-design' ? 'local' : 'oauth'),

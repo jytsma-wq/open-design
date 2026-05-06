@@ -1499,6 +1499,8 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   };
   configureConnectorCredentialStore(new FileConnectorCredentialStore(RUNTIME_DATA_DIR));
   configureComposioConfigStore(RUNTIME_DATA_DIR);
+  composioConnectorProvider.configureCatalogCache(RUNTIME_DATA_DIR);
+  composioConnectorProvider.startCatalogRefreshLoop();
   let daemonUrl = `http://127.0.0.1:${port}`;
 
   // Boot reconcile: any critique_runs row left in 'running' state by a prior

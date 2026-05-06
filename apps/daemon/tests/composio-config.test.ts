@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -82,5 +82,49 @@ describe('composio config', () => {
 
     expect(publicConfig).toEqual({ configured: false, apiKeyTail: '' });
     expect(readComposioConfig()).toEqual({ apiKey: '' });
+  });
+
+  it('loads persisted Composio catalog cache into fast definitions', async () => {
+    const dir = await useTempComposioStore();
+    await mkdir(path.join(dir, 'connectors'), { recursive: true });
+    await writeFile(path.join(dir, 'connectors', 'composio-catalog-cache.json'), JSON.stringify({
+      schemaVersion: 1,
+      provider: 'composio',
+      fetchedAt: '2026-05-07T00:00:00.000Z',
+      definitions: [
+        {
+          id: 'slack',
+          name: 'Slack',
+          provider: 'composio',
+          category: 'Communication',
+          providerConnectorId: 'SLACK',
+          authentication: 'composio',
+          tools: [
+            {
+              name: 'slack.slack_list_channels',
+              title: 'List channels',
+              description: 'List Slack channels',
+              safety: { sideEffect: 'read', approval: 'auto', reason: 'read-only' },
+              refreshEligible: true,
+              curation: { useCases: ['personal_daily_digest'], reason: 'Digest source' },
+              requiredScopes: ['read'],
+              providerToolId: 'SLACK_LIST_CHANNELS',
+            },
+          ],
+          allowedToolNames: ['slack.slack_list_channels'],
+          minimumApproval: 'auto',
+        },
+      ],
+    }, null, 2));
+
+    composioConnectorProvider.configureCatalogCache(dir);
+
+    expect(composioConnectorProvider.getFastDefinitions().find((definition) => definition.id === 'slack')).toMatchObject({
+      id: 'slack',
+      tools: [expect.objectContaining({
+        name: 'slack.slack_list_channels',
+        curation: expect.objectContaining({ useCases: ['personal_daily_digest'] }),
+      })],
+    });
   });
 });
