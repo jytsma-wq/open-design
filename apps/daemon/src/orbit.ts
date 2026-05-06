@@ -45,11 +45,19 @@ export interface OrbitRunHandlerStart {
   completion: Promise<OrbitAgentRunResult>;
 }
 
+export interface OrbitTemplateSelection {
+  id: string;
+  name: string;
+  examplePrompt: string;
+  dir: string;
+}
+
 export type OrbitRunHandler = (request: {
   runId: string;
   trigger: 'manual' | 'scheduled';
   startedAt: string;
   prompt: string;
+  template: OrbitTemplateSelection | null;
 }) => Promise<OrbitRunHandlerStart>;
 
 export function formatLocalProjectTimestamp(iso: string): string {
@@ -62,11 +70,7 @@ export function formatLocalProjectTimestamp(iso: string): string {
   return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
 }
 
-export type OrbitTemplateResolver = (skillId: string) => Promise<{
-  id: string;
-  name: string;
-  examplePrompt: string;
-} | null>;
+export type OrbitTemplateResolver = (skillId: string) => Promise<OrbitTemplateSelection | null>;
 
 export interface OrbitStatus {
   config: OrbitConfigPrefs;
@@ -156,11 +160,7 @@ function renderMarkdown(summary: Omit<OrbitActivitySummary, 'markdown'>): string
   return lines.join('\n').trimEnd();
 }
 
-export function buildOrbitPrompt(now = new Date(), template?: {
-  id: string;
-  name: string;
-  examplePrompt: string;
-} | null): string {
+export function buildOrbitPrompt(now = new Date(), template?: OrbitTemplateSelection | null): string {
   const end = now.toISOString();
   const start = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
   const lines = [
@@ -169,7 +169,7 @@ export function buildOrbitPrompt(now = new Date(), template?: {
     `Time window: ${start} through ${end}.`,
     '',
     'Work autonomously. Do not ask follow-up questions, do not emit a question form, and do not wait for user input. Use sensible defaults and proceed.',
-    'Optimize for fast completion: sample at most 3 relevant data sources. If a source fails because of auth, permissions, timeout, malformed output, empty output, oversized output, or any other data-loading problem, do not get stuck trying to fix it; drop that source and continue with the others. After the artifact is registered successfully, send one concise final message with the artifact id and stop.',
+    'Optimize for fast completion: sample at most 3 relevant data sources. Connector discovery is required before creating the artifact: list available connected data tools with a 120s timeout, and if that list command times out or returns no output, retry it once with another 120s timeout. If connector discovery still fails, or if it returns zero usable connected read-only data tools, do not create an empty-state artifact; send one concise final message explaining that data loading failed and stop. For individual source calls after discovery succeeds, if a source fails because of auth, permissions, timeout, malformed output, empty output, oversized output, or any other data-loading problem, do not get stuck trying to fix it; drop that source and continue with the others. After the artifact is registered successfully, send one concise final message with the artifact id and stop.',
     '',
     'Use the live-artifact skill to author and register the artifact. Use the Open Design CLI help to discover available read-only data tools, then call only the tools needed for a useful digest.',
     '- Prefer recent activity, search, list, updated, or changed-item tools that can be bounded to this 24-hour window.',
@@ -191,14 +191,14 @@ export function buildOrbitPrompt(now = new Date(), template?: {
     '- Actionable recommendations for today: follow-ups, reviews, risks to check, and suggested next steps.',
     '- A short "What I checked today" footnote in user-friendly language that says what categories were reviewed, what was quiet, what was unavailable, and where data was sparse. Do not expose raw errors, HTTP codes, internal ids, tool names, schemas, refresh mechanics, daemon details, or system mechanics.',
     '- Links or identifiers when source data provides them.',
-    '- If there are no connected sources, all sources fail, or all successful sources are empty, still provide a useful empty-state briefing with clear next steps, such as checking account access or trying again later.',
+    '- If connector discovery succeeded and at least one source was checked, but the successful source results are quiet or empty, provide a useful quiet-day briefing with clear next steps. Do not create a digest when connector discovery itself failed or no usable connected read-only data tools were available.',
     '',
     'Voice and synthesis examples:',
     '- Code: “open-design had 4 repositories updated. The most notable change was a daemon update that affects data refresh behavior, so review it before the next release.”',
     '- Docs: “Product Notes and Launch Checklist were the only matching pages. Launch Checklist changed around onboarding and should be reviewed before sharing with the team.”',
     '- Recommendation: “Today, prioritize reviewing the changed release checklist, then follow up on the two open PRs that touched user-facing refresh behavior.”',
     '',
-    'Keep the artifact compact: a single responsive HTML view, no more than roughly 200 lines of template/CSS, and no lengthy design critique pass. If data is sparse, empty, partially unavailable, or all sources fail, still create the Live Artifact and clearly state the useful human-facing outcome. Do not invent activity. Keep the visual design polished but lightweight.',
+    'Keep the artifact compact: a single responsive HTML view, no more than roughly 200 lines of template/CSS, and no lengthy design critique pass. If connector discovery succeeded but checked data is sparse, empty, or partially unavailable, still create the Live Artifact and clearly state the useful human-facing outcome. If connector discovery failed or no usable connected read-only data tools are available, fail fast instead of creating an empty-state artifact. Do not invent activity. Keep the visual design polished but lightweight.',
     'Important: the user-facing artifact must not mention internal product, data plumbing, tool-running, automation terms, raw failure details, or system mechanics. Write it as a normal daily briefing for a person, not as a technical run report.',
   ];
   if (template) {
@@ -207,8 +207,11 @@ export function buildOrbitPrompt(now = new Date(), template?: {
       'Selected example template:',
       `- Skill id: ${template.id}`,
       `- Skill name: ${template.name}`,
+      `- Staged root: .od-skills/${path.basename(template.dir)}/`,
       '',
-      `Invoke the ${template.id} Agent skill for this artifact's structure, visual language, and domain-specific synthesis rules. The selected template's example prompt is:`,
+      `Before writing the artifact, read ".od-skills/${path.basename(template.dir)}/SKILL.md" and, if present, ".od-skills/${path.basename(template.dir)}/example.html". Follow that staged template's structure, layout, tokens, domain rules, and visual language as the source of truth. The staged template is for visual/domain guidance; still use the live-artifact workflow to register the final artifact.`,
+      '',
+      'Selected template example prompt:',
       '',
       template.examplePrompt.trim(),
     );
@@ -273,7 +276,7 @@ export class OrbitService {
       ? await this.templateResolver(this.config.templateSkillId).catch(() => null)
       : null;
     const prompt = buildOrbitPrompt(new Date(startedAt), template);
-    const handlerStart = await this.runHandler({ runId, trigger, startedAt, prompt });
+    const handlerStart = await this.runHandler({ runId, trigger, startedAt, prompt, template });
 
     this.inflightProjectId = handlerStart.projectId;
     this.inflightAgentRunId = handlerStart.agentRunId;

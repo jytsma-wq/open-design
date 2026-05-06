@@ -160,6 +160,7 @@ function collectReferencedSideFiles(body) {
   const files = new Set();
   const matches = body.matchAll(/\b(?:assets|references)\/[A-Za-z0-9._-]+\b/g);
   for (const match of matches) files.add(match[0]);
+  if (/\bexample\.html\b/.test(body)) files.add("example.html");
   return Array.from(files).sort();
 }
 

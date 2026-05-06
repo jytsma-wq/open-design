@@ -4746,7 +4746,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
     }
   };
 
-  orbitService.setRunHandler(async ({ trigger, startedAt, prompt }) => {
+  orbitService.setRunHandler(async ({ trigger, startedAt, prompt, template }) => {
     // Each Orbit run gets its own project so the conversation, messages, and
     // live artifact are isolated. The handler does the synchronous prep here
     // (insert project/conversation/run rows, kick off the chat run) and
@@ -4812,6 +4812,21 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       startedAt: now,
     });
 
+    if (template?.dir) {
+      const cwd = await ensureProject(PROJECTS_DIR, projectId);
+      const result = await stageActiveSkill(
+        cwd,
+        path.basename(template.dir),
+        template.dir,
+        (msg) => console.warn(msg),
+      );
+      if (!result.staged) {
+        console.warn(
+          `[od] orbit template skill-stage skipped: ${result.reason ?? 'unknown reason'}; falling back to prompt-embedded instructions`,
+        );
+      }
+    }
+
     const modelPrefs = appConfig.agentModels?.[agentId] ?? {};
     design.runs.start(run, () => startChatRun({
       agentId,
@@ -4862,6 +4877,7 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
       id: skill.id,
       name: skill.name,
       examplePrompt: skill.examplePrompt,
+      dir: skill.dir,
     };
   });
 

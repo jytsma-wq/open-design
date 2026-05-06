@@ -511,6 +511,7 @@ describe('connector routes', () => {
   it('lists connected Composio tools through run-scoped tool auth', async () => {
     await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
     const token = mintConnectorToolToken();
+    composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
 
     const response = await jsonFetch(`${baseUrl}/api/tools/connectors/list`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -521,6 +522,7 @@ describe('connector routes', () => {
     expect(response.body.connectors[0].tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'github.github_search_repositories', safety: expect.objectContaining({ sideEffect: 'read', approval: 'auto' }) }),
     ]));
+    expect(composioDiscoveryRequestCounts).toEqual({ authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 });
   });
 
   it('executes connected Composio tools through run-scoped tool auth', async () => {

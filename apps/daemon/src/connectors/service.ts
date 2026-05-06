@@ -625,7 +625,12 @@ export class ConnectorService {
   }
 
   async execute(request: ConnectorExecuteRequest, context: ConnectorExecutionContext): Promise<ConnectorExecuteResponse> {
-    const definition = await this.getDefinition(request.connectorId, context.signal);
+    const fastDefinition = this.listFastDefinitions().find((candidate) => (
+      candidate.id === request.connectorId &&
+      candidate.allowedToolNames.includes(request.toolName) &&
+      candidate.tools.some((tool) => tool.name === request.toolName)
+    ));
+    const definition = fastDefinition ?? await this.getDefinition(request.connectorId, context.signal);
     if (!definition) {
       throw new ConnectorServiceError('CONNECTOR_NOT_FOUND', 'connector not found', 404);
     }

@@ -109,6 +109,23 @@ describe('listSkills preamble', () => {
     expect(skill.body).toMatch(/Skill root \(relative to project\)/);
   });
 
+  it('mentions root-level example.html side files in the preamble', async () => {
+    const root = fresh();
+    writeSkill(root, 'orbit-style', {
+      withAttachments: false,
+      body: 'Open and mirror the shipped `example.html` before writing output.',
+    });
+    writeFileSync(path.join(root, 'orbit-style', 'example.html'), '<main>example</main>');
+
+    const skills = await listSkills(root);
+    expect(skills).toHaveLength(1);
+    const [skill] = skills;
+
+    expect(skill.body).toContain(`${SKILLS_CWD_ALIAS}/orbit-style/`);
+    expect(skill.body).toContain(`${SKILLS_CWD_ALIAS}/orbit-style/example.html`);
+    expect(skill.body).toContain('Known side files in this skill: `example.html`.');
+  });
+
   it('uses the on-disk folder name in the alias path even when `name` differs', async () => {
     const root = fresh();
     writeSkill(root, 'guizang-ppt', {
