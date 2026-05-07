@@ -22,6 +22,20 @@ type ConnectorApiErrorCode =
   | 'CONNECTOR_OUTPUT_TOO_LARGE'
   | 'CONNECTOR_EXECUTION_FAILED';
 
+const COMPOSIO_LOGO_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+const COMPOSIO_LOGO_SLUG_ALIASES: Record<string, string> = {
+  zohobooks: 'zoho_books',
+};
+
+interface CachedComposioLogo {
+  body: Buffer;
+  contentType: string;
+  expiresAtMs: number;
+}
+
+const composioLogoCache = new Map<string, CachedComposioLogo>();
+const composioLogoInflight = new Map<string, Promise<CachedComposioLogo | null>>();
+
 export type ConnectorApiErrorSender = (
   res: Response,
   status: number,
@@ -61,6 +75,69 @@ function parseConnectorToolUseCase(value: unknown): ConnectorToolUseCase | undef
   if (value === undefined) return undefined;
   if (value === 'personal_daily_digest') return value;
   return undefined;
+}
+
+function parseConnectorLogoTheme(value: unknown): 'light' | 'dark' {
+  return value === 'light' ? 'light' : 'dark';
+}
+
+function parseConnectorLogoSlug(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.toLowerCase().replace(/[^a-z0-9_]/g, '');
+  const slug = COMPOSIO_LOGO_SLUG_ALIASES[normalized] ?? normalized;
+  return slug.length > 0 ? slug : undefined;
+}
+
+function sendComposioLogo(res: Response, logo: CachedComposioLogo): void {
+  res.setHeader('Content-Type', logo.contentType);
+  res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(logo.body);
+}
+
+async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise<CachedComposioLogo | null> {
+  const cacheKey = `${slug}:${theme}`;
+  const cached = composioLogoCache.get(cacheKey);
+  if (cached && cached.expiresAtMs > Date.now()) return cached;
+
+  const inflight = composioLogoInflight.get(cacheKey);
+  if (inflight) return inflight;
+
+  const promise = (async () => {
+    const upstream = `https://logos.composio.dev/api/${encodeURIComponent(slug)}?theme=${theme}`;
+    const response = await fetch(upstream, {
+      headers: { accept: 'image/svg+xml,image/*;q=0.8,*/*;q=0.5' },
+    });
+    if (!response.ok) return null;
+    const body = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'image/svg+xml';
+    const logo: CachedComposioLogo = {
+      body,
+      contentType: contentType === 'image/svg+xml' ? 'image/svg+xml; charset=utf-8' : contentType,
+      expiresAtMs: Date.now() + COMPOSIO_LOGO_CACHE_TTL_MS,
+    };
+    composioLogoCache.set(cacheKey, logo);
+    return logo;
+  })().finally(() => {
+    composioLogoInflight.delete(cacheKey);
+  });
+  composioLogoInflight.set(cacheKey, promise);
+  return promise;
+}
+
+async function proxyComposioLogo(req: Request, res: Response): Promise<void> {
+  const slug = parseConnectorLogoSlug(req.params.slug);
+  if (!slug) {
+    res.status(400).json({ error: 'logo slug is required' });
+    return;
+  }
+  const theme = parseConnectorLogoTheme(req.query.theme);
+  const logo = await fetchComposioLogo(slug, theme);
+  if (!logo) {
+    res.status(404).end();
+    return;
+  }
+  sendComposioLogo(res, logo);
 }
 
 function connectorCallbackUrl(req: Request): string {
@@ -344,6 +421,14 @@ export function registerConnectorRoutes(app: Express, options: RegisterConnector
         ? ['1', 'true', 'yes'].includes(req.query.refresh.toLowerCase())
         : false;
       res.json(await service.listConnectorDiscovery({ refresh }));
+    } catch (err) {
+      sendConnectorRouteError(res, err, options.sendApiError);
+    }
+  });
+
+  app.get('/api/connectors/logos/:slug', async (req: Request, res: Response) => {
+    try {
+      await proxyComposioLogo(req, res);
     } catch (err) {
       sendConnectorRouteError(res, err, options.sendApiError);
     }

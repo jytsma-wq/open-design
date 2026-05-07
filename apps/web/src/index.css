@@ -4788,6 +4788,217 @@ code {
      baseline of an uppercase letter rather than the descender line. */
   margin-top: -1px;
 }
+
+/* Connector brand mark. Used in two sizes: a compact 28px tile inside
+   catalog cards (`size-sm`) and a 44px mark in the detail drawer head
+   (`size-lg`). The wrapper also hosts the fallback initials tile so the
+   image fades over a stable, themed surface — there is no flash of empty
+   space while the network resolves and no broken-icon chrome if the
+   request fails. The remote logos come from `logos.composio.dev`, keyed
+   by the lowercased toolkit slug stripped of underscores; the URL is
+   built in `ConnectorsBrowser.tsx` so the daemon's friendlier ids
+   (`google_drive`) still resolve to the right CDN entry (`googledrive`). */
+.connector-logo {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  overflow: hidden;
+  isolation: isolate;
+  /* `var(--bg-panel)` already inverts in dark mode, so the logo's
+     transparent corners read cleanly on either theme. The remote SVGs
+     ship with theme-aware fills (we request `?theme=light|dark` to
+     match), but the soft border still gives them a tidy frame. */
+  box-shadow: var(--shadow-xs);
+  user-select: none;
+}
+.connector-logo.size-lg {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+.connector-logo-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  /* Inset the rendered image a hair so brand marks with no built-in
+     padding (small monograms, square photos) don't crash into the
+     border on the small tile. */
+  padding: 4px;
+  /* Fade the image in when it lands so a slow connection doesn't pop
+     content under the user's eye. The fallback underneath provides
+     instant visual presence in the meantime. */
+  opacity: 0;
+  transform: scale(0.96);
+  transition: opacity 160ms ease-out, transform 160ms ease-out;
+  z-index: 1;
+}
+.connector-logo.size-lg .connector-logo-img {
+  padding: 6px;
+}
+.connector-logo.state-loaded .connector-logo-img {
+  opacity: 1;
+  transform: scale(1);
+}
+/* Fallback initials tile. Three jobs, in priority order:
+   1. While the image is pending, the tile is a *neutral skeleton* —
+      no color, no letters showing through. The user shouldn't see a
+      bright colored placeholder flash and then morph into a totally
+      different brand mark when the SVG lands; that mismatch reads as
+      "wrong logo" before it reads as "loading".
+   2. Once the image has loaded, the tile is fully hidden. Composio
+      SVGs frequently have transparent regions, and even a faint
+      colored backdrop bleeds through and tints the brand — exactly
+      the visual mixing we want to avoid. Hiding it (not just dimming)
+      guarantees the real image owns the slot.
+   3. Only when the network actually fails (`state-error`) — or when
+      no slug was derivable in the first place (`is-fallback`) — do we
+      promote the tile to a quiet brand mark with stable initials.
+      Even then it's deliberately *muted*: a single low-saturation
+      neutral surface, lighter weight type, and a subtle hue accent
+      from a hashed palette so two adjacent fallbacks don't read as
+      identical. The intent is "calm placeholder", never "louder than
+      the real logos one row up". */
+.connector-logo-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: transparent;
+  background: var(--bg-subtle);
+  text-transform: uppercase;
+  z-index: 0;
+  /* Default: skeleton mode. Initials are kept in the DOM (so a paint
+     of the error state doesn't have to re-flow text) but rendered
+     transparent. The only visible thing is the soft `--bg-subtle`
+     surface, which sits flush with the wrapper border and reads as a
+     quiet placeholder, not a brand. */
+  transition:
+    color 140ms ease-out,
+    background-color 140ms ease-out,
+    opacity 120ms ease-out;
+}
+.connector-logo.size-lg .connector-logo-fallback {
+  font-size: 14px;
+  letter-spacing: 0.04em;
+}
+/* Pending: gentle shimmer over the neutral surface so the user can
+   tell something is loading, without a colored tile suggesting a
+   particular brand. The shimmer only kicks in if the image takes
+   long enough to matter — short loads finish before the animation
+   even completes one cycle. */
+.connector-logo.state-pending .connector-logo-fallback {
+  background:
+    linear-gradient(
+      90deg,
+      var(--bg-subtle) 0%,
+      color-mix(in srgb, var(--bg-subtle) 60%, var(--bg-panel)) 50%,
+      var(--bg-subtle) 100%
+    );
+  background-size: 200% 100%;
+  animation: connector-logo-shimmer 1400ms ease-in-out infinite;
+}
+@keyframes connector-logo-shimmer {
+  from { background-position: 100% 0; }
+  to   { background-position: -100% 0; }
+}
+/* Loaded: yank the fallback entirely. `visibility: hidden` keeps it
+   out of the paint pipeline so transparent regions in the SVG can't
+   composite over a colored backdrop. */
+.connector-logo.state-loaded .connector-logo-fallback {
+  visibility: hidden;
+  opacity: 0;
+}
+/* Error / no-slug: quiet brand mark. Initials become visible, but in
+   a muted neutral palette by default. The hashed palette below adds
+   a hint of hue so a row of fallbacks isn't monotone, but every
+   variant stays low-saturation and low-contrast against the card
+   surface so the real logos always read as the focal point. */
+.connector-logo.state-error .connector-logo-fallback,
+.connector-logo.is-fallback .connector-logo-fallback {
+  color: var(--text-muted);
+  background: var(--bg-subtle);
+  animation: none;
+}
+.connector-logo.state-error[data-palette='0'] .connector-logo-fallback,
+.connector-logo.is-fallback[data-palette='0'] .connector-logo-fallback {
+  background: color-mix(in oklab, var(--accent) 6%, var(--bg-subtle));
+  color: color-mix(in oklab, var(--accent) 35%, var(--text-muted));
+}
+.connector-logo.state-error[data-palette='1'] .connector-logo-fallback,
+.connector-logo.is-fallback[data-palette='1'] .connector-logo-fallback {
+  background: color-mix(in oklab, #6b8afd 7%, var(--bg-subtle));
+  color: color-mix(in oklab, #6b8afd 38%, var(--text-muted));
+}
+.connector-logo.state-error[data-palette='2'] .connector-logo-fallback,
+.connector-logo.is-fallback[data-palette='2'] .connector-logo-fallback {
+  background: color-mix(in oklab, #2dbfa8 7%, var(--bg-subtle));
+  color: color-mix(in oklab, #2dbfa8 38%, var(--text-muted));
+}
+.connector-logo.state-error[data-palette='3'] .connector-logo-fallback,
+.connector-logo.is-fallback[data-palette='3'] .connector-logo-fallback {
+  background: color-mix(in oklab, #d18b3a 7%, var(--bg-subtle));
+  color: color-mix(in oklab, #d18b3a 40%, var(--text-muted));
+}
+.connector-logo.state-error[data-palette='4'] .connector-logo-fallback,
+.connector-logo.is-fallback[data-palette='4'] .connector-logo-fallback {
+  background: color-mix(in oklab, #c356b3 6%, var(--bg-subtle));
+  color: color-mix(in oklab, #c356b3 38%, var(--text-muted));
+}
+.connector-logo.state-error[data-palette='5'] .connector-logo-fallback,
+.connector-logo.is-fallback[data-palette='5'] .connector-logo-fallback {
+  background: color-mix(in oklab, #5d6b85 9%, var(--bg-subtle));
+  color: color-mix(in oklab, #5d6b85 42%, var(--text-muted));
+}
+/* The wrapper border is what visually frames the tile. When the real
+   image is loaded we keep it; in the fallback states we soften it a
+   step so the tile recedes further compared to a card with a real
+   logo on the same row. */
+.connector-logo.state-error,
+.connector-logo.is-fallback {
+  border-color: var(--border-soft, var(--border));
+  box-shadow: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .connector-logo-img {
+    transition: none;
+    transform: none;
+  }
+  .connector-logo.state-pending .connector-logo-fallback {
+    animation: none;
+    background: var(--bg-subtle);
+  }
+}
+
+/* Embedded catalog (Settings → Connectors). Cards are tighter here so
+   the logo shrinks to 24px and sheds a touch of border radius so it
+   reads as a quiet badge next to the connector name rather than a
+   prominent brand mark. The card-top gap (already 8px in the embedded
+   variant) keeps the logo close to the head copy. */
+.connectors-panel-embedded .connector-logo.size-sm {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+}
+.connectors-panel-embedded .connector-logo.size-sm .connector-logo-img {
+  padding: 3px;
+}
+.connectors-panel-embedded .connector-logo.size-sm .connector-logo-fallback {
+  font-size: 10px;
+}
+
 .connector-meta {
   display: flex;
   align-items: center;
