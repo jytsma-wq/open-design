@@ -408,7 +408,7 @@ export function ConnectorsBrowser({
     (async () => {
       const next = await fetchConnectors();
       if (cancelled) return;
-      setConnectors(next);
+      setConnectors((curr) => mergeConnectors(next, curr));
       setLoading(false);
     })();
     return () => {
