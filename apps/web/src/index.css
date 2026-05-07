@@ -6022,6 +6022,9 @@ button.connector-action.is-loading {
   position: relative;
   transition: background 120ms ease;
 }
+.df-row-live-artifact {
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+}
 .df-row:hover { background: var(--bg-subtle); }
 .df-row.active { background: var(--blue-bg); color: var(--text); }
 .df-row.active .df-row-name { color: var(--text-strong); }
