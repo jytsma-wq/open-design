@@ -481,7 +481,7 @@ describe('SettingsDialog Orbit run behavior', () => {
     expect(JSON.parse(calls[1]!.body ?? '{}')).toMatchObject({ force: true });
   });
 
-  it('does not overwrite daemon media credentials when the local media map is empty', async () => {
+  it('syncs an explicit empty media provider map before starting a manual Orbit run', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -489,6 +489,9 @@ describe('SettingsDialog Orbit run behavior', () => {
       const body = typeof init?.body === 'string' ? init.body : undefined;
       calls.push({ url, method, body });
 
+      if (url === '/api/media/config') {
+        return new Response(null, { status: 204 });
+      }
       if (url === '/api/app-config') {
         return new Response(null, { status: 204 });
       }
@@ -510,7 +513,11 @@ describe('SettingsDialog Orbit run behavior', () => {
       }),
     ).resolves.toEqual({ projectId: 'orbit-project', agentRunId: 'run-4' });
 
-    expect(calls.map((call) => call.url)).toEqual(['/api/app-config', '/api/orbit/run']);
+    expect(calls.map((call) => call.url)).toEqual(['/api/media/config', '/api/app-config', '/api/orbit/run']);
+    expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({
+      providers: {},
+      force: true,
+    });
   });
 
   it('does not start a manual Orbit run when saving Composio credentials fails', async () => {

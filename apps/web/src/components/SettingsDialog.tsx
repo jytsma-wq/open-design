@@ -84,7 +84,7 @@ interface Props {
    * dialog and should NOT mutate onboarding state — it represents an
    * incremental save, not a final commit.
    */
-  onPersist: (cfg: AppConfig) => Promise<void> | void;
+  onPersist: (cfg: AppConfig, options?: { forceMediaProviderSync?: boolean }) => Promise<void> | void;
   /**
    * Persist the Composio API key separately from the broader autosave
    * loop. Composio secrets need an explicit user gesture so half-typed
@@ -849,6 +849,8 @@ export function SettingsDialog({
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveSavedTimerRef = useRef<number | null>(null);
   const autosaveLatestRef = useRef<AppConfig>(cfg);
+  const mediaProvidersChangeVersionRef = useRef(0);
+  const lastSyncedMediaProvidersVersionRef = useRef(0);
   autosaveLatestRef.current = cfg;
   useEffect(() => {
     if (autosaveSkipFirstRef.current) {
@@ -866,10 +868,17 @@ export function SettingsDialog({
     autosaveTimerRef.current = window.setTimeout(() => {
       autosaveTimerRef.current = null;
       const snapshot = autosaveLatestRef.current;
+      const mediaProvidersVersion = mediaProvidersChangeVersionRef.current;
+      const persistOptions = {
+        forceMediaProviderSync: mediaProvidersVersion > lastSyncedMediaProvidersVersionRef.current,
+      };
       setAutosaveStatus('saving');
       void (async () => {
         try {
-          await onPersist(snapshot);
+          await onPersist(snapshot, persistOptions);
+          if (persistOptions.forceMediaProviderSync) {
+            lastSyncedMediaProvidersVersionRef.current = mediaProvidersVersion;
+          }
           // If a newer edit landed while the request was in flight,
           // leave the status as 'pending' so the next debounce tick
           // owns the indicator instead of flashing "Saved".
@@ -904,10 +913,13 @@ export function SettingsDialog({
       if (autosaveTimerRef.current != null) {
         window.clearTimeout(autosaveTimerRef.current);
         autosaveTimerRef.current = null;
+        const mediaProvidersVersion = mediaProvidersChangeVersionRef.current;
         // Best-effort flush; if it rejects, localStorage already has
         // the latest copy from the synchronous saveConfig call inside
         // onPersist.
-        void onPersist(autosaveLatestRef.current);
+        void onPersist(autosaveLatestRef.current, {
+          forceMediaProviderSync: mediaProvidersVersion > lastSyncedMediaProvidersVersionRef.current,
+        });
       }
       if (autosaveSavedTimerRef.current != null) {
         window.clearTimeout(autosaveSavedTimerRef.current);
@@ -1726,7 +1738,15 @@ export function SettingsDialog({
             </>
           ) : null}
 
-          {activeSection === 'media' ? <MediaProvidersSection cfg={cfg} setCfg={setCfg} /> : null}
+          {activeSection === 'media' ? (
+            <MediaProvidersSection
+              cfg={cfg}
+              setCfg={setCfg}
+              onChange={() => {
+                mediaProvidersChangeVersionRef.current += 1;
+              }}
+            />
+          ) : null}
           {activeSection === 'integrations' ? <IntegrationsSection /> : null}
 
           {activeSection === 'composio' ? (
@@ -2060,19 +2080,25 @@ function ConnectorSection({
   const handleClearContinue = () => {
     setClearStage('final');
   };
-  const handleClearCommit = () => {
+  const handleClearCommit = async () => {
+    if (keySaveStatus === 'saving') return;
     if (!clearArmed) return;
-    // Original clear behavior — preserved verbatim so the daemon side
-    // contract (wipe key, mark unconfigured, drop tail) does not change.
-    updateComposio({ apiKey: '', apiKeyConfigured: false, apiKeyTail: '' });
-    void onPersistComposioKey({
-      apiKey: '',
-      apiKeyConfigured: false,
-      apiKeyTail: '',
-    });
-    setCatalogRefreshNonce((nonce) => nonce + 1);
-    setClearStage('idle');
-    setClearArmed(false);
+    setKeySaveStatus('saving');
+    try {
+      const cleared = {
+        apiKey: '',
+        apiKeyConfigured: false,
+        apiKeyTail: '',
+      };
+      await onPersistComposioKey(cleared);
+      updateComposio(cleared);
+      setCatalogRefreshNonce((nonce) => nonce + 1);
+      setClearStage('idle');
+      setClearArmed(false);
+      setKeySaveStatus('idle');
+    } catch {
+      setKeySaveStatus('error');
+    }
   };
 
   return (
@@ -2333,9 +2359,7 @@ export async function persistConfigAndRunOrbit(
     const composioSaved = await syncComposioConfigToDaemon(config.composio);
     if (!composioSaved) throw new Error('Composio config save failed');
   }
-  if (hasAnyConfiguredProvider(config.mediaProviders)) {
-    await syncMediaProvidersToDaemon(config.mediaProviders, { force: true, throwOnError: true });
-  }
+  await syncMediaProvidersToDaemon(config.mediaProviders, { force: true, throwOnError: true });
   await syncConfigToDaemon(config, { throwOnError: true });
   const response = await fetch('/api/orbit/run', { method: 'POST' });
   if (!response.ok) throw new Error('Orbit run failed');
@@ -3128,9 +3152,11 @@ function OrbitSection({
 function MediaProvidersSection({
   cfg,
   setCfg,
+  onChange,
 }: {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  onChange: () => void;
 }) {
   const { t } = useI18n();
   const providers = MEDIA_PROVIDERS
@@ -3149,6 +3175,7 @@ function MediaProvidersSection({
     provider: MediaProvider,
     patch: { apiKey?: string; baseUrl?: string; model?: string },
   ) => {
+    onChange();
     setCfg((curr) => {
       const prev = curr.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '', model: '' };
       const next = { ...prev, ...patch };

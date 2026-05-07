@@ -53,8 +53,9 @@ import type {
 
 export function shouldSyncMediaProvidersOnSave(
   mediaProviders: AppConfig['mediaProviders'],
+  options?: { force?: boolean },
 ): boolean {
-  return hasAnyConfiguredProvider(mediaProviders);
+  return Boolean(options?.force) || hasAnyConfiguredProvider(mediaProviders);
 }
 
 function normalizeSavedComposioConfig(config: AppConfig['composio']): AppConfig['composio'] {
@@ -68,6 +69,19 @@ function normalizeSavedComposioConfig(config: AppConfig['composio']): AppConfig[
     };
   }
   return { ...(config ?? {}) };
+}
+
+export async function persistComposioConfigChange(
+  current: AppConfig,
+  composio: AppConfig['composio'],
+  sync: (config: AppConfig['composio']) => Promise<boolean> = syncComposioConfigToDaemon,
+): Promise<AppConfig> {
+  const saved = await sync(composio);
+  if (!saved) throw new Error('Composio config save failed');
+  return {
+    ...current,
+    composio: normalizeSavedComposioConfig(composio),
+  };
 }
 
 export function App() {
@@ -274,7 +288,10 @@ export function App() {
    * browser. Onboarding is also left alone; the dialog's close path
    * is the canonical "I'm done" signal.
    */
-  const handleConfigPersist = useCallback(async (next: AppConfig) => {
+  const handleConfigPersist = useCallback(async (
+    next: AppConfig,
+    options?: { forceMediaProviderSync?: boolean },
+  ) => {
     // Strip the in-flight Composio secret before anything hits disk so
     // a half-typed key can't survive in localStorage. The visible-state
     // fields (apiKeyConfigured, apiKeyTail) ride through unchanged.
@@ -291,8 +308,12 @@ export function App() {
     saveConfig(persisted);
     setConfig(persisted);
     await Promise.all([
-      shouldSyncMediaProvidersOnSave(persisted.mediaProviders)
-        ? syncMediaProvidersToDaemon(persisted.mediaProviders, { force: false })
+      shouldSyncMediaProvidersOnSave(persisted.mediaProviders, {
+        force: options?.forceMediaProviderSync,
+      })
+        ? syncMediaProvidersToDaemon(persisted.mediaProviders, {
+            force: options?.forceMediaProviderSync,
+          })
         : Promise.resolve(),
       syncConfigToDaemon(persisted),
     ]);
@@ -307,18 +328,14 @@ export function App() {
    */
   const handleConfigPersistComposioKey = useCallback(
     async (composio: AppConfig['composio']) => {
-      // Send the raw pending edit BEFORE we normalize it away for local
-      // persistence — otherwise the daemon would only see the empty
-      // apiKey field that ships in the persisted config.
-      await syncComposioConfigToDaemon(composio);
-      const normalized = normalizeSavedComposioConfig(composio);
+      const next = await persistComposioConfigChange(config, composio);
       setConfig((curr) => {
-        const next: AppConfig = { ...curr, composio: normalized };
-        saveConfig(next);
-        return next;
+        const merged: AppConfig = { ...curr, composio: next.composio };
+        saveConfig(merged);
+        return merged;
       });
     },
-    [],
+    [config],
   );
 
   const handleModeChange = useCallback(
