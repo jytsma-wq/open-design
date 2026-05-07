@@ -210,8 +210,13 @@
     const n = (v, t) => t === "usd" ? `$${Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}` : t === "pct" ? `${Number(v).toFixed(2)}%` : Number(v).toFixed(2);
     const clearTimers = () => { if (demoTimer) clearInterval(demoTimer); if (stepTimer) clearTimeout(stepTimer); demoTimer = null; stepTimer = null; };
 
-    const setTheme = (t) => { document.documentElement.setAttribute("data-theme", t); localStorage.setItem("od-trading-theme", t); $$("#theme button").forEach(b => b.classList.toggle("active", b.dataset.theme === t)); };
-    const savedTheme = localStorage.getItem("od-trading-theme"); if (savedTheme) setTheme(savedTheme);
+    // Storage access can throw SecurityError inside sandboxed iframes that allow
+    // scripts but not same-origin (Open Design's preview), so persistence is
+    // strictly best-effort and must never abort initialization.
+    const safeGetTheme = () => { try { return localStorage.getItem("od-trading-theme"); } catch { return null; } };
+    const safeSetTheme = (t) => { try { localStorage.setItem("od-trading-theme", t); } catch { /* sandbox: persistence unavailable */ } };
+    const setTheme = (t) => { document.documentElement.setAttribute("data-theme", t); safeSetTheme(t); $$("#theme button").forEach(b => b.classList.toggle("active", b.dataset.theme === t)); };
+    const savedTheme = safeGetTheme(); if (savedTheme) setTheme(savedTheme);
     $$("#theme button").forEach(b => b.onclick = () => setTheme(b.dataset.theme));
 
     const updateTick = () => {
