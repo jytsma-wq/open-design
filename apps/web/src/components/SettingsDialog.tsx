@@ -1967,6 +1967,7 @@ function ConnectorSection({
   // the saved state with the same UI as a key loaded from disk.
   const [keySaveStatus, setKeySaveStatus] =
     useState<'idle' | 'saving' | 'error'>('idle');
+  const [catalogRefreshNonce, setCatalogRefreshNonce] = useState(0);
   const handleSaveKey = async () => {
     if (keySaveStatus === 'saving') return;
     if (!hasPendingEdit) return;
@@ -1985,6 +1986,7 @@ function ConnectorSection({
         apiKeyConfigured: true,
         apiKeyTail: pendingKey.trim().slice(-4),
       });
+      setCatalogRefreshNonce((nonce) => nonce + 1);
       setKeySaveStatus('idle');
     } catch {
       setKeySaveStatus('error');
@@ -2068,6 +2070,7 @@ function ConnectorSection({
       apiKeyConfigured: false,
       apiKeyTail: '',
     });
+    setCatalogRefreshNonce((nonce) => nonce + 1);
     setClearStage('idle');
     setClearArmed(false);
   };
@@ -2294,7 +2297,10 @@ function ConnectorSection({
         </span>
       </label>
 
-      <ConnectorsBrowser composioConfigured={savedApiKeyConfigured} />
+      <ConnectorsBrowser
+        composioConfigured={savedApiKeyConfigured}
+        catalogRefreshKey={`${savedApiKeyConfigured ? 'configured' : 'empty'}:${tail ?? ''}:${catalogRefreshNonce}`}
+      />
     </section>
   );
 }

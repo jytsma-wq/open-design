@@ -50,8 +50,13 @@ function applyConnectorStatuses(
   });
 }
 
+function hasAnyConnectorTools(connectors: ConnectorDetail[]): boolean {
+  return connectors.some((connector) => connector.tools.length > 0);
+}
+
 interface ConnectorsBrowserProps {
   composioConfigured: boolean;
+  catalogRefreshKey?: string | number;
 }
 
 /**
@@ -207,6 +212,7 @@ const CONNECTOR_CATEGORY_KEYS = {
 
 export function ConnectorsBrowser({
   composioConfigured,
+  catalogRefreshKey = 0,
 }: ConnectorsBrowserProps) {
   const t = useT();
   const [connectors, setConnectors] = useState<ConnectorDetail[]>([]);
@@ -232,19 +238,17 @@ export function ConnectorsBrowser({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setToolsLoaded(false);
     (async () => {
       const next = await fetchConnectors();
       if (cancelled) return;
       setConnectors(next);
-      if (composioConfigured && next.some((connector) => connector.tools.length > 0)) {
-        setToolsLoaded(true);
-      }
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, [composioConfigured]);
+  }, [composioConfigured, catalogRefreshKey]);
 
   // Lazy Composio discovery — enriched toolkit metadata + auth configuration.
   // Heavier round trip; only worth it once a Composio API key is actually
@@ -264,14 +268,14 @@ export function ConnectorsBrowser({
       const next = await fetchConnectorDiscovery({ refresh: true });
       if (cancelled) return;
       setConnectors((curr) => mergeConnectors(curr, next));
-      setToolsLoaded(true);
+      setToolsLoaded(hasAnyConnectorTools(next));
       setToolsLoading(false);
     })();
     return () => {
       cancelled = true;
       setToolsLoading(false);
     };
-  }, [composioConfigured, toolsLoaded]);
+  }, [composioConfigured, catalogRefreshKey, toolsLoaded]);
 
   // OAuth callback: a popup or system-browser tab postMessages back when an
   // auth flow completes. Trust same-origin + localhost-loopback so packaged
@@ -538,7 +542,7 @@ function ConnectorCard({
   const canConnect = !disabled && !isPending && connector.status === 'available';
   const canDisconnect = !disabled && !isPending && isConnected;
   const toolCount = connector.tools.length;
-  const showToolsBadge = toolsLoaded;
+  const showToolsBadge = toolsLoaded && toolCount > 0;
   const toolsBadgeLabel = formatToolsBadge(toolCount, t);
   const categoryLabel = connectorCategoryLabel(connector.category, t);
 
@@ -717,7 +721,7 @@ function ConnectorDetailDrawer({
   const accountLabel = getDisplayableConnectorAccountLabel(connector);
   const toolCount = connector.tools.length;
   const isLoadingTools = !toolsLoaded || (toolsLoading && toolCount === 0);
-  const showToolsBadge = toolsLoaded;
+  const showToolsBadge = toolsLoaded && toolCount > 0;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const categoryLabel = connectorCategoryLabel(connector.category, t);
 
