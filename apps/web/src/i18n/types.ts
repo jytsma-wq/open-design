@@ -196,9 +196,16 @@ export interface Dict {
   'settings.connectorsReplaceKeyPlaceholder': string;
   'settings.connectorsApiKeyPlaceholder': string;
   'settings.connectorsClear': string;
+  'settings.connectorsSaveKey': string;
+  'settings.connectorsSaveKeyTitle': string;
+  'settings.connectorsKeySaving': string;
+  'settings.connectorsKeyError': string;
   'settings.connectorsHelpSaved': string;
   'settings.connectorsHelpUnsaved': string;
   'settings.connectorsHelpEmpty': string;
+  'settings.autosaveSaving': string;
+  'settings.autosaveSaved': string;
+  'settings.autosaveError': string;
   'settings.orbit.eyebrow': string;
   'settings.orbit.title': string;
   'settings.orbit.navHint': string;
@@ -320,7 +327,6 @@ export interface Dict {
   'connectors.statusDisabled': string;
   'connectors.gateTitle': string;
   'connectors.gateBody': string;
-  'connectors.gateAction': string;
   'connectors.aboutLabel': string;
   'connectors.detailsLabel': string;
   'connectors.statusLabel': string;

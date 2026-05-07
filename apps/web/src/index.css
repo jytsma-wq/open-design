@@ -1108,6 +1108,10 @@ code {
   padding: 0;
   gap: 0;
   max-height: calc(100vh - 64px);
+  /* Anchor for the absolutely-positioned `.settings-chrome` strip
+     (close button + autosave indicator). Without this the chrome
+     would escape to the viewport on long-scrolling sections. */
+  position: relative;
 }
 @media (max-height: 600px) {
   .modal-settings { max-height: 90vh; }
@@ -1163,6 +1167,177 @@ code {
   border-top: 1px solid var(--border);
   margin-top: 0;
   flex-shrink: 0;
+}
+
+/* Top-right chrome strip for the Settings dialog. Floats above the
+   sidebar/content rhythm so the close affordance and the autosave
+   indicator never compete with the title or sidebar nav. The strip
+   is a flex row right-anchored to the modal corner; the autosave
+   pill comes first so the close button keeps a stable optical
+   position and the user's eye returns to the same place after a
+   save settles. */
+.settings-chrome {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none; /* children opt back in */
+}
+.settings-chrome > * {
+  pointer-events: auto;
+}
+
+/* Close button. Minimal circular icon button with a hairline ring
+   that warms on hover and snaps to the accent on focus-visible.
+   Sized to read as a passive corner control rather than a primary
+   CTA — the autosave indicator next to it carries any system
+   feedback the user might need. */
+.settings-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background-color 140ms ease, transform 140ms ease;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.settings-close:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 22%, var(--border));
+  background: var(--bg-panel);
+  transform: scale(1.04);
+}
+.settings-close:active {
+  transform: scale(0.96);
+}
+.settings-close:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  color: var(--text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-close { transition: color 80ms linear, border-color 80ms linear; transform: none !important; }
+}
+
+/* Autosave status pill. Lives in the chrome strip now (next to the
+   close button) instead of a footer. Renders nothing while idle so
+   the chrome reads as a single close button until something is
+   actually saving; settles to a green check on success and red on
+   failure. The pill never takes focus and never blocks input — it
+   is a passive system message announced to assistive tech via
+   aria-live on the wrapper. */
+.settings-autosave {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--bg-panel) 90%, transparent);
+  border: 1px solid transparent;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: opacity 160ms ease, color 160ms ease, background-color 160ms ease, border-color 160ms ease, transform 160ms ease;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+}
+.settings-autosave.is-idle {
+  opacity: 0;
+  transform: translateY(-2px);
+  /* Collapse the visual weight so the chrome strip is just the
+     close button when nothing is happening. */
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  min-height: 0;
+}
+.settings-autosave.is-pending,
+.settings-autosave.is-saving {
+  opacity: 1;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--text-muted) 12%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--text-muted) 18%, transparent);
+}
+.settings-autosave.is-saved {
+  opacity: 1;
+  color: var(--green, #1f9d55);
+  background: color-mix(in srgb, var(--green, #1f9d55) 14%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--green, #1f9d55) 30%, transparent);
+  animation: settingsAutosavePop 220ms ease-out;
+}
+.settings-autosave.is-error {
+  opacity: 1;
+  color: var(--red, #d23434);
+  background: color-mix(in srgb, var(--red, #d23434) 14%, var(--bg-panel));
+  border-color: color-mix(in srgb, var(--red, #d23434) 32%, transparent);
+}
+@keyframes settingsAutosavePop {
+  from { transform: translateY(-2px) scale(0.98); }
+  to   { transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-autosave { transition: opacity 80ms linear; animation: none !important; }
+}
+
+/* Hide the verbose error copy on narrow viewports so the chrome
+   strip doesn't crowd the close button. The icon + tooltip carry
+   the meaning, and the screen-reader announcement still fires. */
+@media (max-width: 720px) {
+  .settings-autosave.is-error span,
+  .settings-autosave.is-saved span,
+  .settings-autosave.is-pending span,
+  .settings-autosave.is-saving span {
+    display: none;
+  }
+  .settings-autosave.is-idle { padding: 0; }
+}
+
+/* Make sure header copy doesn't crash into the close button on
+   narrow viewports. The kicker/title/subtitle should keep their
+   normal width but reserve right-side gutter for the chrome. */
+.modal-settings .modal-head {
+  padding-right: calc(var(--modal-padding) + 56px);
+}
+
+/* Section-local Save key button for the Composio API key field. We do
+   NOT autosave secrets, so this is the explicit gesture. Styled as a
+   primary button to stand out next to the password input + ghost
+   Clear, with a tighter vertical rhythm so it sits flush in the
+   field-row alongside the input. */
+.settings-connectors-save {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.settings-connectors-save.is-busy {
+  opacity: 0.85;
+  cursor: progress;
+}
+.settings-section-connectors .field-row {
+  /* Allow the input + Save key + Clear triplet to wrap on narrow widths
+     instead of crushing the input. */
+  flex-wrap: wrap;
+}
+@media (max-width: 540px) {
+  .settings-section-connectors .field-row > input {
+    flex: 1 1 100%;
+  }
 }
 .settings-sidebar {
   display: flex;
@@ -4398,9 +4573,33 @@ code {
   line-height: 1.25;
   letter-spacing: -0.005em;
   color: var(--text);
+  /* The title is now a flex row so a connection-status dot can sit
+     inline next to the connector name without breaking the title's
+     truncation. The name span owns the ellipsis; the dot stays at a
+     fixed size on the trailing edge of the row. */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.connector-card-title-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* Inline title-anchored connection dot. Sized + offset so it visually
+   aligns with the title's cap-height rather than its full line-height,
+   and given a soft halo on the connected variant so the live state
+   reads as a small "online" pulse next to the connector name. The
+   halo collapses to nothing in non-connected variants because today
+   the dot is only rendered for `connected` (error/disabled use a
+   separate pill in the action column). */
+.connector-card-title-dot {
+  flex: 0 0 auto;
+  /* Optical alignment: pull the dot up by ~1px so it sits on the
+     baseline of an uppercase letter rather than the descender line. */
+  margin-top: -1px;
 }
 .connector-meta {
   display: flex;
@@ -4635,14 +4834,15 @@ button.connector-action.is-loading {
 }
 .connectors-panel-embedded .toolbar-right {
   flex: 1 1 auto;
-  justify-content: stretch;
+  justify-content: space-between;
   gap: 10px;
-  align-items: stretch;
+  align-items: center;
+  flex-wrap: nowrap;
 }
 .connectors-panel-embedded .tab-panel-toolbar .toolbar-search.connectors-search {
-  flex: 1 1 100%;
-  width: auto;
-  max-width: none;
+  flex: 0 1 320px;
+  width: min(320px, 100%);
+  max-width: 320px;
   min-width: 180px;
 }
 
@@ -4723,23 +4923,96 @@ button.connector-action.is-loading {
   font-weight: 600;
   letter-spacing: 0;
 }
+/* Two-row meta layout for the embedded catalog. The previous single
+   row let long category labels wrap unpredictably, leaving cards in
+   a 3-column grid with mismatched heights. Stacking onto its own
+   rows fixes the height and gives the async tools-badge a stable
+   anchor to animate into without resizing the card. */
 .connectors-panel-embedded .connector-meta {
+  flex-direction: column;
+  align-items: flex-start;
+  flex-wrap: nowrap;
   font-size: 11px;
   gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+/* Category row: single line with ellipsis. The full label is still
+   reachable via the `title` attribute on the span and the card's
+   own openDetailsAria, so we never lose information. */
+.connectors-panel-embedded .connector-meta-category {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+/* Tools-badge slot. Reserves its own row and a fixed height even
+   while the discovery call is in flight (`aria-hidden` is set on the
+   span before the badge resolves), so the card doesn't grow when
+   the badge animates in. The fixed height matches the embedded
+   badge's pill (1px + 1px borders + 10px text + 2px padding × 2 ≈
+   18px). */
+.connectors-panel-embedded .connector-meta-tools {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  /* Hairline visual placeholder while the discovery request is in
+     flight — a 1px-tall faint baseline so the row reads as
+     intentionally reserved space rather than an empty gap. The
+     placeholder is dropped the moment the badge appears. */
+  position: relative;
+}
+.connectors-panel-embedded .connector-meta-tools[aria-hidden="true"]::after {
+  content: '';
+  display: block;
+  width: 32px;
+  height: 1px;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  border-radius: 999px;
+}
+/* The dot separator was only meaningful when the meta was a single
+   inline row; in the stacked layout it would float orphaned at the
+   start of the badge row. Hide it (the embedded card no longer
+   renders it in JSX, but keep the rule defensive in case a future
+   refactor reintroduces inline separators here). */
+.connectors-panel-embedded .connector-meta .connector-meta-dot {
+  display: none;
 }
 .connectors-panel-embedded .connector-tools-badge {
   padding: 1px 6px;
   font-size: 10px;
   border-radius: 999px;
 }
+/* Anchor the action column to the top now that the meta block can be
+   one or two rows tall — center alignment used to make the action
+   drift down whenever the badge appeared. Keeping the action top-
+   aligned matches the title baseline and stops the eye from
+   tracking up and down across cards. */
 .connectors-panel-embedded .connector-card-top {
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
 }
+.connectors-panel-embedded .connector-card-actions {
+  /* Nudge the action button down a touch so it optically aligns with
+     the title's cap-height instead of its top edge. */
+  margin-top: 1px;
+}
 
-/* Icon-only connect/disconnect action: a 24px square that sits flush with
-   the card's top-right edge. We keep the same `connector-action` class so
-   pending/loading state styling carries over from the original button. */
+/* Icon-only connect/disconnect action: a 26px circular control anchored
+   at the card's top-right edge. We keep the same `connector-action`
+   class so loading/disabled state styling carries over from the
+   shared rules above, but the visual treatment is overridden here so
+   the catalog grid doesn't end up with a row of high-contrast filled
+   squares competing for attention. The default state is a subtle
+   ghost — almost recedes into the card — and the action picks up
+   accent weight only when the card or the button itself is hovered
+   or focused. The whole card is also clickable (it opens the
+   details drawer where Connect lives at full size), so this is a
+   secondary affordance, not the primary CTA. */
 .connectors-panel-embedded .connector-card-actions {
   display: inline-flex;
   align-items: center;
@@ -4750,61 +5023,130 @@ button.connector-action.is-loading {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  /* Reset the min-width from the non-embedded `.is-connect` / `.is-disconnect`
-     pill rules above; in the compact catalog the action collapses to a 24px
-     square and any `min-width` would force it back into a wide pill that
-     overlaps the card head text. */
+  width: 26px;
+  height: 26px;
+  /* Reset the min-width from the non-embedded `.is-connect` /
+     `.is-disconnect` pill rules above; in the compact catalog the
+     action collapses to a 26px circle and any `min-width` would
+     force it back into a wide pill that overlaps the card head
+     text. */
   min-width: 0;
   padding: 0;
-  border-radius: 7px;
-  border: 1px solid var(--border);
-  background: var(--bg-panel);
-  color: var(--text);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
   cursor: pointer;
   transition:
-    background 140ms ease,
-    border-color 140ms ease,
-    color 140ms ease,
-    transform 120ms ease;
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 120ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+/* Soft default fill so the ghost button still has a visible target on
+   the lightest card backgrounds. We tint with `--text` rather than a
+   solid color so the control reads correctly in both dark and light
+   themes without per-theme overrides. */
+.connectors-panel-embedded button.connector-action.icon-only {
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+/* When the parent card is hovered, the action gains a touch more weight
+   so it telegraphs interactivity without ever flashing to full white.
+   This applies whether the user is hovering the card or the button
+   directly, so reaching for the action never feels like the button
+   moves out from under them. */
+.connectors-panel-embedded .connector-card:hover:not(.is-locked) button.connector-action.icon-only:not(:disabled),
+.connectors-panel-embedded .connector-card:focus-visible button.connector-action.icon-only:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
 }
 .connectors-panel-embedded button.connector-action.icon-only:hover:not(:disabled) {
-  border-color: color-mix(in srgb, var(--text) 32%, var(--border));
-  background: color-mix(in srgb, var(--text) 6%, var(--bg-panel));
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  border-color: color-mix(in srgb, var(--text) 24%, transparent);
 }
 .connectors-panel-embedded button.connector-action.icon-only:active:not(:disabled) {
-  transform: scale(0.94);
+  transform: scale(0.92);
 }
 .connectors-panel-embedded button.connector-action.icon-only:focus-visible {
   outline: none;
-  border-color: color-mix(in srgb, var(--text) 48%, var(--border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--text) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
 }
 .connectors-panel-embedded button.connector-action.icon-only:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
 }
+@media (prefers-reduced-motion: reduce) {
+  .connectors-panel-embedded button.connector-action.icon-only {
+    transition: background 80ms linear, color 80ms linear;
+  }
+  .connectors-panel-embedded button.connector-action.icon-only:active:not(:disabled) {
+    transform: none;
+  }
+}
+
+/* Connect (the "+" affordance). Refined into an accent-tinted ghost so
+   the action reads as inviting rather than competing — the previous
+   "fill with var(--text)" rule produced a hard off-white square in
+   dark theme that fought every other card. Default state borrows a
+   whisper of the accent so the plus is visibly the accent action of
+   the card; hover/card-hover both lift the tint up while keeping the
+   button transparent enough to feel like part of the card surface,
+   not a stamped-on chip. */
 .connectors-panel-embedded button.connector-action.is-connect {
-  border-color: color-mix(in srgb, var(--text) 38%, var(--border));
-  background: var(--text);
-  color: var(--bg);
+  color: color-mix(in srgb, var(--accent) 76%, var(--text-muted));
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.connectors-panel-embedded .connector-card:hover:not(.is-locked) button.connector-action.is-connect:not(:disabled),
+.connectors-panel-embedded .connector-card:focus-visible button.connector-action.is-connect:not(:disabled) {
+  color: var(--accent-strong, var(--accent));
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 .connectors-panel-embedded button.connector-action.is-connect:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--text) 88%, var(--bg));
-  border-color: var(--text);
+  color: var(--accent-strong, var(--accent));
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 56%, transparent);
+  box-shadow: 0 4px 14px -8px color-mix(in srgb, var(--accent) 60%, transparent);
 }
+.connectors-panel-embedded button.connector-action.is-connect:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+/* Disconnect stays neutral until the user actually points at it, then
+   warms to the destructive red so the "remove" intent is unambiguous.
+   Slightly de-emphasized at rest compared to Connect — the connected
+   row already carries a green status dot to communicate state, so
+   this control doesn't need to advertise itself. */
 .connectors-panel-embedded button.connector-action.is-disconnect {
   color: var(--text-muted);
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  border-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+.connectors-panel-embedded .connector-card:hover:not(.is-locked) button.connector-action.is-disconnect:not(:disabled),
+.connectors-panel-embedded .connector-card:focus-visible button.connector-action.is-disconnect:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
 }
 .connectors-panel-embedded button.connector-action.is-disconnect:hover:not(:disabled) {
   color: var(--red, var(--text));
-  border-color: color-mix(in srgb, var(--red, var(--text)) 50%, var(--border));
+  background: color-mix(in srgb, var(--red, var(--text)) 14%, transparent);
+  border-color: color-mix(in srgb, var(--red, var(--text)) 42%, transparent);
 }
 
-/* A small connection-status pip that sits beside the action button when the
-   connector is connected. Replaces the wider "Connected" pill on the card —
-   the pill still shows in the drawer header where space allows. */
+/* Connection-status pip. Lives inline next to the connector name in
+   the embedded catalog (anchored via `.connector-card-title-dot`),
+   and the same dot is reused in the drawer where the rules above
+   handle the larger non-embedded variant. The halo is a `box-shadow`
+   ring rather than a `border` so the dot's optical size stays at
+   7px even with the green pulse around it. */
 .connectors-panel-embedded .connector-status-dot {
   display: inline-block;
   width: 7px;
@@ -4829,14 +5171,14 @@ button.connector-action.is-loading {
   padding: 1px 6px;
 }
 
-/* Toolbar wraps gracefully on narrow modals: tabs above, search below. */
+/* On very narrow modals, keep tabs and search on one row while letting the
+   search input absorb the squeeze. */
 @media (max-width: 540px) {
-  .connectors-panel-embedded .toolbar-right {
-    flex-direction: column;
-    align-items: stretch;
-  }
   .connectors-provider-tabs {
-    align-self: flex-start;
+    flex-shrink: 0;
+  }
+  .connectors-panel-embedded .tab-panel-toolbar .toolbar-search.connectors-search {
+    min-width: 0;
   }
 }
 .connector-gate {
@@ -4898,13 +5240,6 @@ button.connector-action.is-loading {
   font-size: 13px;
   line-height: 1.5;
 }
-.connector-gate-action {
-  margin-top: 6px;
-  padding: 7px 16px;
-  font-size: 13px;
-  font-weight: 500;
-}
-
 /* ------------------------------------------------------------------ */
 /* Connector detail drawer                                             */
 /* ------------------------------------------------------------------ */

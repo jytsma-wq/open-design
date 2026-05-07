@@ -76,7 +76,22 @@ interface Props {
   appVersionInfo: AppVersionInfo | null;
   welcome?: boolean;
   initialSection?: SettingsSection;
-  onSave: (cfg: AppConfig, closeModal?: boolean) => Promise<{ success: boolean; config?: AppConfig }> | void;
+  /**
+   * Persist the current draft. Invoked by the dialog's autosave loop on
+   * every committed edit. Returns a promise that resolves once both
+   * localStorage and the daemon have caught up so the footer status
+   * indicator can flip from "Saving…" to "Saved". Should NOT close the
+   * dialog and should NOT mutate onboarding state — it represents an
+   * incremental save, not a final commit.
+   */
+  onPersist: (cfg: AppConfig) => Promise<void> | void;
+  /**
+   * Persist the Composio API key separately from the broader autosave
+   * loop. Composio secrets need an explicit user gesture so half-typed
+   * keys never leave the browser, so this is wired to a section-local
+   * "Save key" button rather than the autosave channel.
+   */
+  onPersistComposioKey: (composio: AppConfig['composio']) => Promise<void> | void;
   onClose: () => void;
   onRefreshAgents: (
     options?: AgentRefreshOptions,
@@ -500,7 +515,8 @@ export function SettingsDialog({
   appVersionInfo,
   welcome,
   initialSection = 'execution',
-  onSave,
+  onPersist,
+  onPersistComposioKey,
   onClose,
   onRefreshAgents,
 }: Props) {
@@ -805,14 +821,105 @@ export function SettingsDialog({
   const apiProtocol = cfg.apiProtocol ?? 'anthropic';
   const baseUrlValid = isValidApiBaseUrl(cfg.baseUrl);
   const baseUrlInvalid = Boolean(cfg.baseUrl.trim() && !baseUrlValid);
-  const canSave =
-    cfg.mode === 'daemon'
-      ? Boolean(cfg.agentId && agents.find((a) => a.id === cfg.agentId)?.available)
-      : Boolean(
-          cfg.apiKey.trim() &&
-          cfg.model.trim() &&
-          baseUrlValid,
-        );
+
+  // Autosave loop. Every committed edit to `cfg` schedules a debounced
+  // sync to localStorage + the daemon. We keep a 400ms debounce so rapid
+  // typing in text fields doesn't flood the daemon with PUTs while still
+  // feeling near-instant for toggles/selects (which fire once and settle).
+  // The Composio API key field is intentionally excluded from this loop —
+  // see ConnectorSection for the explicit "Save key" gesture.
+  // The status here drives the footer indicator: 'idle' = no draft to
+  // flush, 'pending' = scheduled, 'saving' = request in flight, 'saved'
+  // = recent successful sync, 'error' = recent failure.
+  const [autosaveStatus, setAutosaveStatus] =
+    useState<'idle' | 'pending' | 'saving' | 'saved' | 'error'>('idle');
+  // Skip the very first effect tick so just opening the dialog doesn't
+  // appear to "save" anything before the user has touched a field.
+  const autosaveSkipFirstRef = useRef(true);
+  const autosaveTimerRef = useRef<number | null>(null);
+  const autosaveSavedTimerRef = useRef<number | null>(null);
+  const autosaveLatestRef = useRef<AppConfig>(cfg);
+  autosaveLatestRef.current = cfg;
+  useEffect(() => {
+    if (autosaveSkipFirstRef.current) {
+      autosaveSkipFirstRef.current = false;
+      return;
+    }
+    setAutosaveStatus('pending');
+    if (autosaveSavedTimerRef.current != null) {
+      window.clearTimeout(autosaveSavedTimerRef.current);
+      autosaveSavedTimerRef.current = null;
+    }
+    if (autosaveTimerRef.current != null) {
+      window.clearTimeout(autosaveTimerRef.current);
+    }
+    autosaveTimerRef.current = window.setTimeout(() => {
+      autosaveTimerRef.current = null;
+      const snapshot = autosaveLatestRef.current;
+      setAutosaveStatus('saving');
+      void (async () => {
+        try {
+          await onPersist(snapshot);
+          // If a newer edit landed while the request was in flight,
+          // leave the status as 'pending' so the next debounce tick
+          // owns the indicator instead of flashing "Saved".
+          if (autosaveLatestRef.current !== snapshot) {
+            setAutosaveStatus('pending');
+            return;
+          }
+          setAutosaveStatus('saved');
+          autosaveSavedTimerRef.current = window.setTimeout(() => {
+            autosaveSavedTimerRef.current = null;
+            // Settle to idle after a moment so the indicator doesn't
+            // stay on "Saved" forever and become noise.
+            setAutosaveStatus((curr) => (curr === 'saved' ? 'idle' : curr));
+          }, 1800);
+        } catch {
+          setAutosaveStatus('error');
+        }
+      })();
+    }, 400);
+    return () => {
+      if (autosaveTimerRef.current != null) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [cfg, onPersist]);
+  // Flush any pending autosave on unmount so a fast-closing dialog
+  // never strands an in-flight edit. We also clear the "Saved" toast
+  // timer to avoid setState after unmount.
+  useEffect(() => {
+    return () => {
+      if (autosaveTimerRef.current != null) {
+        window.clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+        // Best-effort flush; if it rejects, localStorage already has
+        // the latest copy from the synchronous saveConfig call inside
+        // onPersist.
+        void onPersist(autosaveLatestRef.current);
+      }
+      if (autosaveSavedTimerRef.current != null) {
+        window.clearTimeout(autosaveSavedTimerRef.current);
+        autosaveSavedTimerRef.current = null;
+      }
+    };
+  }, [onPersist]);
+
+  // Global Escape closes the dialog. With no footer button anymore the
+  // close affordances are: top-right X · backdrop click · Escape. We
+  // skip the handler when an inline popover (e.g. the language menu
+  // listbox) is open, because that menu owns its own Escape handling
+  // and closing the dialog out from under it would be jarring.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      if (languageOpen) return;
+      onClose();
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose, languageOpen]);
 
   const protocolProviders = useMemo(
     () => KNOWN_PROVIDERS.filter((p) => p.protocol === apiProtocol),
@@ -849,9 +956,58 @@ export function SettingsDialog({
         className="modal modal-settings"
         role="dialog"
         aria-modal="true"
+        aria-labelledby="settings-dialog-title"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="modal-head">
+        {/* Top-right chrome strip — anchored to the modal corner so the
+            autosave indicator and the close button float above the
+            sidebar/content rhythm without competing with the title.
+            We use `position: absolute` instead of putting these inside
+            `.modal-head` so the welcome variant's tall hero (kicker /
+            title / subtitle / pet teaser) keeps its centred reading
+            measure, and the close button always lands at the same
+            optical location regardless of how much copy the header
+            renders. */}
+        <div className="settings-chrome" aria-hidden={false}>
+          {/* Autosave status pill. Only renders something while a save
+              is in flight or has just completed — idle = invisible so
+              first-open feels calm. The chrome strip itself stays
+              mounted so the close button never shifts when the pill
+              appears, and the pill is announced via aria-live for
+              assistive tech. */}
+          <div
+            className={`settings-autosave is-${autosaveStatus}`}
+            role="status"
+            aria-live="polite"
+          >
+            {autosaveStatus === 'saving' || autosaveStatus === 'pending' ? (
+              <>
+                <Icon name="spinner" size={12} className="icon-spin" />
+                <span>{t('settings.autosaveSaving')}</span>
+              </>
+            ) : autosaveStatus === 'saved' ? (
+              <>
+                <Icon name="check" size={12} />
+                <span>{t('settings.autosaveSaved')}</span>
+              </>
+            ) : autosaveStatus === 'error' ? (
+              <>
+                <Icon name="close" size={12} />
+                <span>{t('settings.autosaveError')}</span>
+              </>
+            ) : null}
+          </div>
+          <button
+            type="button"
+            className="settings-close"
+            onClick={onClose}
+            aria-label={t('common.close')}
+            title={t('common.close')}
+          >
+            <Icon name="close" size={16} strokeWidth={2} />
+          </button>
+        </div>
+        <header className="modal-head" id="settings-dialog-title">
           {welcome ? (
             <>
               <span className="kicker">{t('settings.welcomeKicker')}</span>
@@ -1563,7 +1719,13 @@ export function SettingsDialog({
           {activeSection === 'media' ? <MediaProvidersSection cfg={cfg} setCfg={setCfg} /> : null}
           {activeSection === 'integrations' ? <IntegrationsSection /> : null}
 
-          {activeSection === 'composio' ? <ConnectorSection cfg={cfg} setCfg={setCfg} /> : null}
+          {activeSection === 'composio' ? (
+            <ConnectorSection
+              cfg={cfg}
+              setCfg={setCfg}
+              onPersistComposioKey={onPersistComposioKey}
+            />
+          ) : null}
 
           {activeSection === 'orbit' ? (
             <OrbitSection
@@ -1573,10 +1735,13 @@ export function SettingsDialog({
               onOpenComposioSection={() => setActiveSection('composio')}
               onLeaveForOrbitProject={(runConfig) => {
                 // Persist any in-flight Orbit edits (toggle / time) before
-                // navigating away so they aren't silently lost. onSave also
-                // closes the dialog, so the user lands directly on the
+                // navigating away so they aren't silently lost. The autosave
+                // loop is best-effort; this synchronous flush guarantees the
+                // run-config landed on the daemon before we tear the dialog
+                // down. Closing the dialog drops the user on the
                 // /projects/orbit view where the agent run streams in.
-                onSave(runConfig);
+                void onPersist(runConfig);
+                onClose();
               }}
             />
           ) : null}
@@ -1718,25 +1883,6 @@ export function SettingsDialog({
           ) : null}
           </div>
         </div>
-
-        <footer className="modal-foot">
-          <button type="button" className="ghost" onClick={onClose}>
-            {welcome ? t('settings.skipForNow') : t('common.cancel')}
-          </button>
-          <button
-            type="button"
-            className="primary"
-            disabled={!canSave}
-            onClick={() => {
-              void (async () => {
-                const result = await onSave(cfg, activeSection !== 'composio');
-                if (result?.success && result.config) setCfg(result.config);
-              })();
-            }}
-          >
-            {welcome ? t('settings.getStarted') : t('common.save')}
-          </button>
-        </footer>
       </div>
     </div>
   );
@@ -1773,9 +1919,14 @@ export function deriveComposioCredentialState(
 function ConnectorSection({
   cfg,
   setCfg,
+  onPersistComposioKey,
 }: {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  /** Persist the freshly typed Composio API key to the daemon. Returns
+   *  once both localStorage and the daemon have caught up so the
+   *  section-local Save button can flip from "Saving…" back to idle. */
+  onPersistComposioKey: (composio: AppConfig['composio']) => Promise<void> | void;
 }) {
   const { t } = useI18n();
   const composio = cfg.composio ?? {};
@@ -1785,21 +1936,40 @@ function ConnectorSection({
   };
   const credentialState = deriveComposioCredentialState(composio);
   const hasSavedKey = credentialState === 'saved' || credentialState === 'saved-pending';
+  const hasPendingEdit = credentialState === 'pending-new' || credentialState === 'saved-pending';
   const apiKeyConfigured = credentialState !== 'empty';
-  const savedApiKeyConfigured = hasSavedKey;
+  const savedApiKeyConfigured = Boolean(composio.apiKeyConfigured || hasSavedKey);
   const tail = composio.apiKeyTail?.trim();
 
-  // The credentials field sits ABOVE the embedded catalog so the user lands
-  // on the input first. The catalog gate CTA still calls into here to put
-  // focus back on the input — we scroll into view with `block: 'start'` so
-  // the field stays visible above the masked grid rather than jumping the
-  // grid up under the modal header.
-  const credentialsRef = useRef<HTMLLabelElement | null>(null);
-  const apiKeyInputRef = useRef<HTMLInputElement | null>(null);
-  const focusComposioCredentials = () => {
-    credentialsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    // Defer focus so the scroll animation doesn't fight the focus ring.
-    window.setTimeout(() => apiKeyInputRef.current?.focus(), 220);
+  // Section-local save state. The Composio key bypasses the dialog's
+  // global autosave loop because it is a secret — we don't want
+  // partial-typed keys leaving the browser on every keystroke. The
+  // user explicitly clicks "Save key" when they're ready, the request
+  // completes, the daemon returns a tail-only echo, and we land in
+  // the saved state with the same UI as a key loaded from disk.
+  const [keySaveStatus, setKeySaveStatus] =
+    useState<'idle' | 'saving' | 'error'>('idle');
+  const handleSaveKey = async () => {
+    if (keySaveStatus === 'saving') return;
+    if (!hasPendingEdit) return;
+    const pendingKey = composio.apiKey ?? '';
+    setKeySaveStatus('saving');
+    try {
+      await onPersistComposioKey(cfg.composio);
+      // Mirror the parent's normalization so the local draft moves
+      // into the saved state immediately: drop the secret from the
+      // input, mark configured, and store the last-4 tail for the
+      // status badge. The parent's setConfig won't propagate back to
+      // the dialog because `initial` is read once at mount.
+      updateComposio({
+        apiKey: '',
+        apiKeyConfigured: true,
+        apiKeyTail: pendingKey.trim().slice(-4),
+      });
+      setKeySaveStatus('idle');
+    } catch {
+      setKeySaveStatus('error');
+    }
   };
 
   return (
@@ -1811,7 +1981,7 @@ function ConnectorSection({
         </div>
       </div>
 
-      <label className="field settings-section-connectors-credentials" ref={credentialsRef}>
+      <label className="field settings-section-connectors-credentials">
         <span className="field-label-row">
           <span className="field-label-group">
             <span className="field-label">{t('settings.connectorsComposioApiKey')}</span>
@@ -1838,7 +2008,6 @@ function ConnectorSection({
         </span>
         <div className="field-row">
           <input
-            ref={apiKeyInputRef}
             type="password"
             value={composio.apiKey ?? ''}
             placeholder={
@@ -1847,30 +2016,67 @@ function ConnectorSection({
                 : t('settings.connectorsApiKeyPlaceholder')
             }
             onChange={(e) => updateComposio({ apiKey: e.target.value })}
+            onKeyDown={(e) => {
+              // Enter from the password field commits the key — the
+              // most common save gesture for credential fields, and
+              // it removes the need to mouse over to the button.
+              if (e.key === 'Enter' && hasPendingEdit && keySaveStatus !== 'saving') {
+                e.preventDefault();
+                void handleSaveKey();
+              }
+            }}
             aria-describedby="composio-api-key-help"
           />
           <button
             type="button"
+            className={'primary settings-connectors-save' + (keySaveStatus === 'saving' ? ' is-busy' : '')}
+            disabled={!hasPendingEdit || keySaveStatus === 'saving'}
+            onClick={() => void handleSaveKey()}
+            title={t('settings.connectorsSaveKeyTitle')}
+          >
+            {keySaveStatus === 'saving' ? (
+              <>
+                <Icon name="spinner" size={12} className="icon-spin" />
+                <span>{t('settings.connectorsKeySaving')}</span>
+              </>
+            ) : (
+              t('settings.connectorsSaveKey')
+            )}
+          </button>
+          <button
+            type="button"
             className="ghost"
-            disabled={!apiKeyConfigured}
-            onClick={() => updateComposio({ apiKey: '', apiKeyConfigured: false, apiKeyTail: '' })}
+            disabled={!apiKeyConfigured || keySaveStatus === 'saving'}
+            onClick={() => {
+              // "Clear" wipes the local + saved state immediately and
+              // pushes the cleared payload to the daemon so the next
+              // catalog refresh masks again. This is the one Composio
+              // edit that we DO want to persist instantly: there is
+              // no half-cleared state, and the user expects the
+              // unlock to reverse on click.
+              updateComposio({ apiKey: '', apiKeyConfigured: false, apiKeyTail: '' });
+              void onPersistComposioKey({
+                apiKey: '',
+                apiKeyConfigured: false,
+                apiKeyTail: '',
+              });
+            }}
           >
             {t('settings.connectorsClear')}
           </button>
         </div>
         <span id="composio-api-key-help" className="hint">
-          {credentialState === 'saved'
-            ? t('settings.connectorsHelpSaved')
-            : apiKeyConfigured
-              ? t('settings.connectorsHelpUnsaved')
-              : t('settings.connectorsHelpEmpty')}
+          {keySaveStatus === 'error'
+            ? t('settings.connectorsKeyError')
+            : hasSavedKey
+              ? t('settings.connectorsHelpSaved')
+              : apiKeyConfigured
+                ? t('settings.connectorsHelpUnsaved')
+                : t('settings.connectorsHelpEmpty')}
         </span>
       </label>
 
-      <ConnectorsBrowser
-        composioConfigured={savedApiKeyConfigured}
-        onFocusComposioCredentials={focusComposioCredentials}
-      />
+      <ConnectorsBrowser composioConfigured={savedApiKeyConfigured} />
     </section>
   );
 }

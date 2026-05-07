@@ -250,32 +250,61 @@ export function App() {
     setTemplates(list);
   }, []);
 
-  const handleConfigSave = useCallback(async (next: AppConfig, closeModal: boolean = true) => {
-    // Only sync Composio key to the daemon when it actually changed,
-    // so unrelated saves (theme, model, etc.) are never blocked.
-    const composioChanged =
-      next.composio?.apiKey !== config.composio?.apiKey ||
-      next.composio?.apiKeyConfigured !== config.composio?.apiKeyConfigured;
-    if (composioChanged) {
-      const ok = await syncComposioConfigToDaemon(next.composio);
-      if (!ok) return { success: false };
-    }
-    const withOnboarding: AppConfig = {
+  /**
+   * Autosave-driven persistence path. The settings dialog calls this on
+   * every committed edit (via a debounced effect) so localStorage and
+   * the daemon stay in lock-step with the user's draft. We deliberately
+   * do NOT touch the Composio secret here — it has its own gesture
+   * (handleConfigPersistComposioKey) so partial keys never leave the
+   * browser. Onboarding is also left alone; the dialog's close path
+   * is the canonical "I'm done" signal.
+   */
+  const handleConfigPersist = useCallback(async (next: AppConfig) => {
+    // Strip the in-flight Composio secret before anything hits disk so
+    // a half-typed key can't survive in localStorage. The visible-state
+    // fields (apiKeyConfigured, apiKeyTail) ride through unchanged.
+    const persisted: AppConfig = {
       ...next,
-      composio: normalizeSavedComposioConfig(next.composio),
-      onboardingCompleted: true,
+      composio: next.composio
+        ? {
+            apiKey: '',
+            apiKeyConfigured: Boolean(next.composio.apiKeyConfigured),
+            apiKeyTail: next.composio.apiKeyTail ?? '',
+          }
+        : next.composio,
     };
-    saveConfig(withOnboarding);
-    if (shouldSyncMediaProvidersOnSave(withOnboarding.mediaProviders)) {
-      void syncMediaProvidersToDaemon(withOnboarding.mediaProviders, {
-        force: true,
+    saveConfig(persisted);
+    setConfig(persisted);
+    await Promise.all([
+      shouldSyncMediaProvidersOnSave(persisted.mediaProviders)
+        ? syncMediaProvidersToDaemon(persisted.mediaProviders, { force: false })
+        : Promise.resolve(),
+      syncConfigToDaemon(persisted),
+    ]);
+  }, []);
+
+  /**
+   * Explicit Composio API-key save. Called from the section-local
+   * "Save key" button so secrets never ride the autosave keystroke
+   * loop. Once the daemon confirms, we normalize the saved config
+   * (strip the secret, store apiKeyConfigured + apiKeyTail) and feed
+   * it back into local state so the saved-key badge appears.
+   */
+  const handleConfigPersistComposioKey = useCallback(
+    async (composio: AppConfig['composio']) => {
+      // Send the raw pending edit BEFORE we normalize it away for local
+      // persistence — otherwise the daemon would only see the empty
+      // apiKey field that ships in the persisted config.
+      await syncComposioConfigToDaemon(composio);
+      const normalized = normalizeSavedComposioConfig(composio);
+      setConfig((curr) => {
+        const next: AppConfig = { ...curr, composio: normalized };
+        saveConfig(next);
+        return next;
       });
-    }
-    void syncConfigToDaemon(withOnboarding);
-    setConfig(withOnboarding);
-    if (closeModal) setSettingsOpen(false);
-    return { success: true, config: withOnboarding };
-  }, [config]);
+    },
+    [],
+  );
 
   const handleModeChange = useCallback(
     (mode: AppConfig['mode']) => {
@@ -604,13 +633,15 @@ export function App() {
           appVersionInfo={appVersionInfo}
           welcome={settingsWelcome}
           initialSection={settingsInitialSection}
-          onSave={handleConfigSave}
+          onPersist={handleConfigPersist}
+          onPersistComposioKey={handleConfigPersistComposioKey}
           onClose={() => {
-            // Dismissing the welcome modal (Skip for now / backdrop click)
-            // also counts as onboarding-done; we don't want to keep
-            // re-prompting on every refresh just because the user opted
-            // not to save.
-            if (settingsWelcome && !config.onboardingCompleted) {
+            // Closing the dialog is the canonical "I'm done" gesture
+            // now that there is no global Save button. We mark
+            // onboardingCompleted on close so the welcome modal stops
+            // re-prompting on every refresh, regardless of whether
+            // the user changed anything during the session.
+            if (!config.onboardingCompleted) {
               const next: AppConfig = { ...config, onboardingCompleted: true };
               saveConfig(next);
               void syncConfigToDaemon(next);

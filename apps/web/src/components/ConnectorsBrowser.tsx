@@ -52,13 +52,6 @@ function applyConnectorStatuses(
 
 interface ConnectorsBrowserProps {
   composioConfigured: boolean;
-  /**
-   * Scroll/focus the Composio API key field in the same Settings → Connectors
-   * section. When the catalog is masked because no API key is configured,
-   * the gate CTA invokes this so the user can paste their key without
-   * navigating away from the connectors surface.
-   */
-  onFocusComposioCredentials: () => void;
 }
 
 /**
@@ -214,7 +207,6 @@ const CONNECTOR_CATEGORY_KEYS = {
 
 export function ConnectorsBrowser({
   composioConfigured,
-  onFocusComposioCredentials,
 }: ConnectorsBrowserProps) {
   const t = useT();
   const [connectors, setConnectors] = useState<ConnectorDetail[]>([]);
@@ -244,21 +236,32 @@ export function ConnectorsBrowser({
       const next = await fetchConnectors();
       if (cancelled) return;
       setConnectors(next);
+      if (composioConfigured && next.some((connector) => connector.tools.length > 0)) {
+        setToolsLoaded(true);
+      }
       setLoading(false);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [composioConfigured]);
 
   // Lazy Composio discovery — enriched toolkit metadata + auth configuration.
-  // Heavier round trip; only worth it once this surface is actually mounted.
+  // Heavier round trip; only worth it once a Composio API key is actually
+  // saved. Before that, discovery returns no live tools and the web-side
+  // provider cache can otherwise keep those empty tool lists after Save key.
   useEffect(() => {
+    if (!composioConfigured) {
+      setToolsLoaded(false);
+      setToolsLoading(false);
+      return;
+    }
     if (toolsLoaded) return;
+
     let cancelled = false;
     setToolsLoading(true);
     (async () => {
-      const next = await fetchConnectorDiscovery();
+      const next = await fetchConnectorDiscovery({ refresh: true });
       if (cancelled) return;
       setConnectors((curr) => mergeConnectors(curr, next));
       setToolsLoaded(true);
@@ -268,7 +271,7 @@ export function ConnectorsBrowser({
       cancelled = true;
       setToolsLoading(false);
     };
-  }, [toolsLoaded]);
+  }, [composioConfigured, toolsLoaded]);
 
   // OAuth callback: a popup or system-browser tab postMessages back when an
   // auth flow completes. Trust same-origin + localhost-loopback so packaged
@@ -483,14 +486,6 @@ export function ConnectorsBrowser({
                 </div>
                 <h3 className="connector-gate-title">{t('connectors.gateTitle')}</h3>
                 <p className="connector-gate-body">{t('connectors.gateBody')}</p>
-                <button
-                  type="button"
-                  className="primary connector-gate-action"
-                  onClick={onFocusComposioCredentials}
-                  data-testid="connector-gate-action"
-                >
-                  {t('connectors.gateAction')}
-                </button>
               </div>
             </div>
           ) : null}
@@ -576,27 +571,50 @@ function ConnectorCard({
     >
       <div className="connector-card-top">
         <div className="connector-card-head">
-          <h3 className="connector-card-title">{connector.name}</h3>
+          {/* Title row composes the connector name with an inline
+              connection dot when applicable, instead of putting the
+              dot in the action column. The dot now reads as a small
+              "live status" indicator anchored to the brand label,
+              while the action column is reserved purely for the
+              connect/disconnect controls and any error/disabled
+              status chips. The name span carries the ellipsis so a
+              long brand never crowds the dot out of the row. */}
+          <h3 className="connector-card-title">
+            <span className="connector-card-title-name">{connector.name}</span>
+            {isConnected ? (
+              <span
+                className={`connector-status-dot connector-card-title-dot status-${connector.status}`}
+                aria-label={statusLabel(connector.status, t)}
+                title={statusLabel(connector.status, t)}
+                role="img"
+              />
+            ) : null}
+          </h3>
+          {/* Two-row meta block. Splitting category and tools-badge onto
+              their own rows keeps card heights deterministic — long
+              category labels no longer push the badge to a new line in
+              an unpredictable way, and the tools-badge slot reserves
+              its row even before the async discovery resolves so the
+              card doesn't grow when the badge appears. The category
+              row truncates with ellipsis (one line); the badge row is
+              a fixed-height anchor that the badge animates into. */}
           <div className="connector-meta">
-            <span className="connector-meta-item">{categoryLabel}</span>
-            {showToolsBadge ? (
-              <>
-                <span className="connector-meta-dot" aria-hidden>·</span>
+            <span
+              className="connector-meta-item connector-meta-category"
+              title={categoryLabel}
+            >
+              {categoryLabel}
+            </span>
+            <span className="connector-meta-tools" aria-hidden={!showToolsBadge}>
+              {showToolsBadge ? (
                 <span className="connector-tools-badge is-ready" title={toolsBadgeLabel}>
                   <span>{toolsBadgeLabel}</span>
                 </span>
-              </>
-            ) : null}
+              ) : null}
+            </span>
           </div>
         </div>
         <div className="connector-card-actions">
-          {isConnected ? (
-            <span
-              className={`connector-status-dot status-${connector.status}`}
-              aria-label={statusLabel(connector.status, t)}
-              title={statusLabel(connector.status, t)}
-            />
-          ) : null}
           {isConnected ? (
             <button
               type="button"
