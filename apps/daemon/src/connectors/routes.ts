@@ -123,31 +123,30 @@ async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise
 
   const promise = (async () => {
     const upstream = `https://logos.composio.dev/api/${encodeURIComponent(slug)}?theme=${theme}`;
-    let response: globalThis.Response;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), COMPOSIO_LOGO_FETCH_TIMEOUT_MS);
     try {
-      response = await fetch(upstream, {
+      const response = await fetch(upstream, {
         headers: { accept: 'image/avif,image/webp,image/apng,image/png,image/jpeg' },
         signal: controller.signal,
       });
+      if (!response.ok) return null;
+      const body = Buffer.from(await response.arrayBuffer());
+      const contentType = normalizeImageContentType(response.headers.get('content-type'));
+      if (!contentType) return null;
+      const logo: CachedComposioLogo = {
+        body,
+        contentType,
+        expiresAtMs: Date.now() + COMPOSIO_LOGO_CACHE_TTL_MS,
+      };
+      composioLogoCache.set(cacheKey, logo);
+      return logo;
     } catch (error) {
       if (isAbortLikeError(error)) return null;
       throw error;
     } finally {
       clearTimeout(timer);
     }
-    if (!response.ok) return null;
-    const body = Buffer.from(await response.arrayBuffer());
-    const contentType = normalizeImageContentType(response.headers.get('content-type'));
-    if (!contentType) return null;
-    const logo: CachedComposioLogo = {
-      body,
-      contentType,
-      expiresAtMs: Date.now() + COMPOSIO_LOGO_CACHE_TTL_MS,
-    };
-    composioLogoCache.set(cacheKey, logo);
-    return logo;
   })().finally(() => {
     composioLogoInflight.delete(cacheKey);
   });

@@ -561,6 +561,48 @@ describe('connector routes', () => {
     expect(upstreamRequests).toBe(2);
   }, 15_000);
 
+  it('keeps the Composio logo timeout active while reading the response body', async () => {
+    let upstreamRequests = 0;
+    let firstBodyReadAborted = false;
+    const slug = 'body_timeout_logo';
+    mockComposioFetch({
+      logoFetch: async (_parsed, init) => {
+        upstreamRequests += 1;
+        if (upstreamRequests === 1) {
+          return {
+            ok: true,
+            headers: new Headers({ 'content-type': 'image/png' }),
+            arrayBuffer: async () => {
+              await new Promise((resolve) => setTimeout(resolve, 2_100));
+              if (!init?.signal) throw new Error('expected fetch timeout signal');
+              if (init.signal.aborted) {
+                firstBodyReadAborted = true;
+                throw (init.signal.reason ?? new DOMException('Aborted', 'AbortError'));
+              }
+              return Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+            },
+          };
+        }
+        return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    const firstResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(firstBodyReadAborted).toBe(true);
+    expect(firstResponse.status).toBe(404);
+
+    const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await secondResponse.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(upstreamRequests).toBe(2);
+  }, 15_000);
+
   it('serves raster Composio logo responses', async () => {
     mockComposioFetch({
       logoFetch: async () => {
