@@ -459,7 +459,9 @@ export class ComposioConnectorProvider {
   }
 
   getFastDefinitions(): ConnectorCatalogDefinition[] {
-    return this.persistedDefinitions ?? getStaticComposioCatalogDefinitions();
+    return this.persistedDefinitions && this.persistedDefinitions.length > 0
+      ? this.persistedDefinitions
+      : getStaticComposioCatalogDefinitions();
   }
 
   getPersistedCatalogMetadata(): { fetchedAt?: string; stale: boolean } {

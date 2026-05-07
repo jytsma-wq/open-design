@@ -9,7 +9,7 @@ import {
   readPublicComposioConfig,
   writeComposioConfig,
 } from '../src/connectors/composio-config.js';
-import { composioConnectorProvider } from '../src/connectors/composio.js';
+import { composioConnectorProvider, getStaticComposioCatalogDefinitions } from '../src/connectors/composio.js';
 import type { ConnectorCatalogDefinition } from '../src/connectors/catalog.js';
 
 async function useTempComposioStore(): Promise<string> {
@@ -126,6 +126,21 @@ describe('composio config', () => {
         curation: expect.objectContaining({ useCases: ['personal_daily_digest'] }),
       })],
     });
+  });
+
+  it('falls back to the static catalog when the persisted cache is empty', async () => {
+    const dir = await useTempComposioStore();
+    await mkdir(path.join(dir, 'connectors'), { recursive: true });
+    await writeFile(path.join(dir, 'connectors', 'composio-catalog-cache.json'), JSON.stringify({
+      schemaVersion: 1,
+      provider: 'composio',
+      fetchedAt: '2026-05-07T00:00:00.000Z',
+      definitions: [],
+    }, null, 2));
+
+    composioConnectorProvider.configureCatalogCache(dir);
+
+    expect(composioConnectorProvider.getFastDefinitions()).toEqual(getStaticComposioCatalogDefinitions());
   });
 
   it('does not hydrate persisted catalog cache before the runtime data directory is configured', async () => {
