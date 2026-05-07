@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  buildPersistedConfig,
   persistComposioConfigChange,
   shouldSyncMediaProvidersOnSave,
 } from '../src/App';
@@ -53,5 +54,16 @@ describe('shouldSyncMediaProvidersOnSave', () => {
 
   it('syncs an explicit empty media map when the user save should force a clear', () => {
     expect(shouldSyncMediaProvidersOnSave({}, { force: true })).toBe(true);
+  });
+});
+
+describe('buildPersistedConfig', () => {
+  it('preserves onboarding completion when a stale autosave snapshot says false', () => {
+    expect(
+      buildPersistedConfig(
+        { ...baseConfig, onboardingCompleted: false },
+        { ...baseConfig, onboardingCompleted: true },
+      ),
+    ).toMatchObject({ onboardingCompleted: true });
   });
 });

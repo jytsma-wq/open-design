@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { EntryView } from './components/EntryView';
 import type { CreateInput } from './components/NewProjectPanel';
 import { PetOverlay } from './components/pet/PetOverlay';
@@ -84,8 +84,24 @@ export async function persistComposioConfigChange(
   };
 }
 
+export function buildPersistedConfig(next: AppConfig, current: AppConfig): AppConfig {
+  return {
+    ...next,
+    onboardingCompleted: current.onboardingCompleted ? true : next.onboardingCompleted,
+    composio: next.composio
+      ? {
+          apiKey: '',
+          apiKeyConfigured: Boolean(next.composio.apiKeyConfigured),
+          apiKeyTail: next.composio.apiKeyTail ?? '',
+        }
+      : next.composio,
+  };
+}
+
 export function App() {
   const [config, setConfig] = useState<AppConfig>(() => loadConfig());
+  const configRef = useRef(config);
+  configRef.current = config;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsWelcome, setSettingsWelcome] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('execution');
@@ -293,18 +309,10 @@ export function App() {
     options?: { forceMediaProviderSync?: boolean },
   ) => {
     // Strip the in-flight Composio secret before anything hits disk so
-    // a half-typed key can't survive in localStorage. The visible-state
-    // fields (apiKeyConfigured, apiKeyTail) ride through unchanged.
-    const persisted: AppConfig = {
-      ...next,
-      composio: next.composio
-        ? {
-            apiKey: '',
-            apiKeyConfigured: Boolean(next.composio.apiKeyConfigured),
-            apiKeyTail: next.composio.apiKeyTail ?? '',
-          }
-        : next.composio,
-    };
+    // a half-typed key can't survive in localStorage. If the dialog is
+    // closing, preserve any onboarding completion that the close gesture
+    // already committed so an unmount autosave cannot re-open the welcome flow.
+    const persisted = buildPersistedConfig(next, configRef.current);
     saveConfig(persisted);
     setConfig(persisted);
     await Promise.all([
