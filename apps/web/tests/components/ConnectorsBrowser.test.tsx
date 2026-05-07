@@ -42,12 +42,7 @@ describe('ConnectorsBrowser', () => {
     vi.mocked(fetchConnectorDiscovery).mockResolvedValue([configuredComposioConnector]);
     vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
 
-    render(
-      <ConnectorsBrowser
-        composioConfigured={false}
-        onFocusComposioCredentials={() => {}}
-      />,
-    );
+    render(<ConnectorsBrowser composioConfigured={false} />);
 
     await waitFor(() => expect(screen.getByTestId('connector-gate')).toBeTruthy());
     expect(screen.getByTestId('connector-grid-wrap').className).toContain('is-masked');
