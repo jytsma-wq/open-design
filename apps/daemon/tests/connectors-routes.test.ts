@@ -484,6 +484,8 @@ describe('connector routes', () => {
     expect(html).toContain('GitHub connected');
     expect(html).toContain('Open Design');
     expect(html).toContain('open-design:connector-connected');
+    expect(html).toContain('function requestClose()');
+    expect(html).toContain('Your browser blocked automatic closing. You can close this tab and return to Open Design.');
     expect(html).not.toContain('<p>Connector connected. You can close this window.</p>');
   });
 

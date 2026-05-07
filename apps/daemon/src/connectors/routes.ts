@@ -378,17 +378,32 @@ function renderConnectorConnectedHtml(connectorId: string): string {
         const connectorId = ${connectorIdJson};
         const connectorLabel = ${connectorLabelJson};
         const message = { type: 'open-design:connector-connected', connectorId, connectorLabel };
+        const closeButton = document.getElementById('close-window');
+        const hint = document.getElementById('auto-close-hint');
+        function showManualCloseHint() {
+          closeButton.textContent = 'Close this tab manually';
+          hint.textContent = 'Your browser blocked automatic closing. You can close this tab and return to Open Design.';
+        }
+        function requestClose() {
+          try {
+            window.close();
+          } finally {
+            window.setTimeout(() => {
+              if (document.visibilityState === 'visible') showManualCloseHint();
+            }, 250);
+          }
+        }
         try {
           if (window.opener && !window.opener.closed) {
             window.opener.postMessage(message, '*');
-            window.setTimeout(() => window.close(), 900);
+            window.setTimeout(requestClose, 900);
           } else {
-            document.getElementById('auto-close-hint').textContent = 'You can close this tab and return to Open Design.';
+            hint.textContent = 'You can close this tab and return to Open Design.';
           }
         } catch {
-          document.getElementById('auto-close-hint').textContent = 'You can close this tab and return to Open Design.';
+          hint.textContent = 'You can close this tab and return to Open Design.';
         }
-        document.getElementById('close-window').addEventListener('click', () => window.close());
+        closeButton.addEventListener('click', requestClose);
       })();
     </script>
   </body>
