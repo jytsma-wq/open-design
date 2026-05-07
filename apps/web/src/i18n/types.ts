@@ -256,6 +256,14 @@ export interface Dict {
   'settings.orbit.copy': string;
   'settings.orbit.openArtifact': string;
   'settings.orbit.sourceMarkdown': string;
+  'settings.orbit.gateAriaLabel': string;
+  'settings.orbit.gateEyebrow': string;
+  'settings.orbit.gateTitle': string;
+  'settings.orbit.gateBody': string;
+  'settings.orbit.gateBodyNoKey': string;
+  'settings.orbit.gateAction': string;
+  'settings.orbit.gateActionNoKey': string;
+  'settings.orbit.gateLoading': string;
 
   // Notifications (settings + system notifications)
   'settings.notifications': string;

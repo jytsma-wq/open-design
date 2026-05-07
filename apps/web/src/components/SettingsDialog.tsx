@@ -37,7 +37,7 @@ import type {
   SkillSummary,
 } from '../types';
 import { testAgent, testApiProvider } from '../providers/connection-test';
-import { fetchSkills } from '../providers/registry';
+import { fetchConnectors, fetchSkills } from '../providers/registry';
 import { MEDIA_PROVIDERS } from '../media/models';
 import type { MediaProvider } from '../media/models';
 import { PetSettings } from './pet/PetSettings';
@@ -1569,6 +1569,8 @@ export function SettingsDialog({
             <OrbitSection
               cfg={cfg}
               setCfg={setCfg}
+              composioApiKeyConfigured={Boolean(cfg.composio?.apiKeyConfigured)}
+              onOpenComposioSection={() => setActiveSection('composio')}
               onLeaveForOrbitProject={(runConfig) => {
                 // Persist any in-flight Orbit edits (toggle / time) before
                 // navigating away so they aren't silently lost. onSave also
@@ -1948,10 +1950,21 @@ function formatRelative(
 function OrbitSection({
   cfg,
   setCfg,
+  composioApiKeyConfigured,
+  onOpenComposioSection,
   onLeaveForOrbitProject,
 }: {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  /** Whether the user has already saved a Composio API key. Drives the
+   *  Orbit configuration gate's copy/CTA. When false the gate explains
+   *  that Orbit needs Composio first; when true (key present, just no
+   *  connectors yet) it nudges the user toward the connector catalog. */
+  composioApiKeyConfigured: boolean;
+  /** Switch the parent settings dialog to the Connectors (Composio) tab.
+   *  Used by the Orbit gate's primary CTA so the user can fix the
+   *  prerequisite without leaving the dialog. */
+  onOpenComposioSection: () => void;
   /** Called right before navigating to the generated Orbit project so the
    *  parent dialog can persist any unsaved Orbit edits and close itself. */
   onLeaveForOrbitProject: (runConfig: AppConfig) => void;
@@ -1968,6 +1981,14 @@ function OrbitSection({
   // the daemon is offline the call resolves with [] (see fetchSkills) so the
   // section never throws — the rest of the Orbit controls keep working.
   const [orbitTemplates, setOrbitTemplates] = useState<SkillSummary[] | null>(null);
+  // Connector presence drives the configuration gate at the top of the Orbit
+  // tab. We track three states: `null` = still loading (skip rendering the
+  // gate so it doesn't flash before data arrives), `0` = no connectors
+  // present (gate is shown), `>0` = at least one connected integration
+  // (gate is hidden). We only count connectors with `status === 'connected'`
+  // because the catalog itself ships hundreds of available rows — what
+  // matters for Orbit is whether anything has actually been wired up.
+  const [connectedCount, setConnectedCount] = useState<number | null>(null);
   // Once the user clicks Generate we close Settings and navigate away. The ref
   // lets late-arriving handlers no-op without React warnings.
   const isMountedRef = useRef(true);
@@ -2023,6 +2044,24 @@ function OrbitSection({
         return a.name.localeCompare(b.name);
       });
       setOrbitTemplates(filtered);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  // Fetch the connector catalog once on mount to determine whether the Orbit
+  // configuration gate should render. fetchConnectors swallows errors and
+  // returns []; if the daemon is offline we treat that as "0 connected" and
+  // surface the gate so the user has a clear path forward instead of being
+  // dropped into a broken Orbit configuration.
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const list = await fetchConnectors();
+      if (!alive) return;
+      const connected = list.filter((c) => c.status === 'connected').length;
+      setConnectedCount(connected);
     })();
     return () => {
       alive = false;
@@ -2117,6 +2156,29 @@ function OrbitSection({
     ? t('settings.orbit.triggerManual')
     : t('settings.orbit.triggerScheduled');
 
+  // Surface the configuration gate when we know for sure that the user has
+  // no connected integrations. While `connectedCount === null` we are still
+  // loading and intentionally hide the gate so the panel doesn't flash an
+  // empty-state warning before data arrives. Once resolved, `0` triggers
+  // the gate. The gate's copy + CTA branch on whether a Composio API key
+  // has been saved: missing key → push toward configuring Composio first;
+  // key present, no connections → push toward picking an integration.
+  const showConfigGate = connectedCount === 0;
+  const gateBodyKey = composioApiKeyConfigured
+    ? 'settings.orbit.gateBody'
+    : 'settings.orbit.gateBodyNoKey';
+  const gateActionKey = composioApiKeyConfigured
+    ? 'settings.orbit.gateAction'
+    : 'settings.orbit.gateActionNoKey';
+  // Disable the hero's "Run it now" CTA while the gate is visible: running
+  // without any connector wired up surfaces a cryptic backend error. We
+  // keep the button mounted so layout stays stable; a tooltip and the
+  // adjacent gate make the disabled reason obvious.
+  const runDisabled = isBusy || showConfigGate;
+  const runDisabledTitle = showConfigGate
+    ? t('settings.orbit.gateTitle')
+    : t('settings.orbit.runTitle');
+
   return (
     <section className="settings-section orbit-section">
       {/* ---------- 1. HEADER ZONE ---------- */}
@@ -2149,8 +2211,8 @@ function OrbitSection({
             type="button"
             className={'orbit-run-cta' + (isBusy ? ' is-busy' : '')}
             onClick={() => void triggerNow()}
-            disabled={isBusy}
-            title={t('settings.orbit.runTitle')}
+            disabled={runDisabled}
+            title={runDisabledTitle}
           >
             {isBusy ? (
               <>
@@ -2166,6 +2228,56 @@ function OrbitSection({
           </button>
         </div>
       </header>
+
+      {/* ---------- 1b. CONFIGURATION GATE ----------
+          Renders when no connected integrations are present. Orbit's job is
+          to summarize connector activity, so without any wired-up
+          connector there is literally nothing for it to report on.
+          The gate uses the same orbit-themed accent surface as the
+          automation card to feel like a first-class part of the panel
+          rather than an inline error, and routes the user back to the
+          Connectors tab inside the same settings dialog (no navigation
+          off the page). The copy/CTA branch on whether a Composio API
+          key has been saved already, because the prerequisite chain is:
+          API key → connector connected → Orbit can run. */}
+      {showConfigGate ? (
+        <div
+          className="orbit-config-gate"
+          role="region"
+          aria-label={t('settings.orbit.gateAriaLabel')}
+          data-testid="orbit-config-gate"
+        >
+          <div className="orbit-config-gate-glyph" aria-hidden="true">
+            <span className="orbit-config-gate-ring orbit-config-gate-ring-outer" />
+            <span className="orbit-config-gate-ring orbit-config-gate-ring-inner" />
+            <span className="orbit-config-gate-icon">
+              <Icon name="link" size={16} />
+            </span>
+          </div>
+          <div className="orbit-config-gate-copy">
+            <span className="orbit-config-gate-eyebrow">
+              {t('settings.orbit.gateEyebrow')}
+            </span>
+            <h4 className="orbit-config-gate-title">
+              {t('settings.orbit.gateTitle')}
+            </h4>
+            <p className="orbit-config-gate-body">
+              {t(gateBodyKey)}
+            </p>
+          </div>
+          <div className="orbit-config-gate-actions">
+            <button
+              type="button"
+              className="orbit-config-gate-action"
+              onClick={onOpenComposioSection}
+              data-testid="orbit-config-gate-action"
+            >
+              <span>{t(gateActionKey)}</span>
+              <Icon name="chevron-right" size={13} />
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {/* ---------- 2. AUTOMATION CARD ----------
           Single unified configuration surface for Orbit: the daily-summary
@@ -2485,7 +2597,7 @@ function OrbitSection({
                 : <>{t('settings.orbit.emptyBodyManual')}</>}
             </p>
             {/* The empty state used to host its own primary CTA, but the
-                hero already exposes "Run & open" — we removed the duplicate
+                hero already exposes "Run it now" — we removed the duplicate
                 and keep this slot reserved for inline run-status feedback so
                 error/success messages still have a home in the empty state. */}
             {notice ? (

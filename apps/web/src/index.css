@@ -2030,6 +2030,167 @@ code {
   .orbit-counts .orbit-count + .orbit-count::before { display: none; }
 }
 
+/* ---------- 1b. Configuration gate ---------------------------------------
+   Surfaces when the user has no connected integrations. We share the
+   orbit-themed accent palette of the hero/firstrun panel so the gate
+   reads as a first-class part of the panel rather than an inline error
+   banner. Layout mirrors the firstrun composition (glyph · copy · action)
+   so the section feels rhythmically consistent regardless of which
+   empty-state panel is showing. The decorative ring glyph reuses the
+   same dashed-orbit motif as the firstrun glyph but anchors a small
+   "link" icon at the center to telegraph "wire up a connector". */
+.orbit-config-gate {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  border-radius: var(--radius);
+  background:
+    radial-gradient(120% 160% at 0% 50%, color-mix(in srgb, var(--accent-tint) 90%, transparent) 0%, transparent 60%),
+    var(--bg-panel);
+  box-shadow: var(--shadow-xs);
+  overflow: hidden;
+  animation: orbitConfigGateIn 220ms ease-out;
+}
+.orbit-config-gate::after {
+  /* Soft outer ring decoration in the corner — pure visual, mirrors the
+     firstrun panel so the two empty states feel like siblings. */
+  content: '';
+  position: absolute;
+  right: -50px;
+  top: -50px;
+  width: 160px;
+  height: 160px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--accent) 18%, transparent);
+  pointer-events: none;
+}
+@keyframes orbitConfigGateIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.orbit-config-gate-glyph {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.orbit-config-gate-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 1px dashed color-mix(in srgb, var(--accent) 42%, transparent);
+}
+.orbit-config-gate-ring-outer {
+  inset: 0;
+  animation: orbitFirstrunSpin 22s linear infinite;
+}
+.orbit-config-gate-ring-inner {
+  inset: 9px;
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 26%, transparent);
+  animation: orbitFirstrunSpin 16s linear infinite reverse;
+}
+.orbit-config-gate-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, #000) 100%);
+  color: var(--btn-primary-fg, #fff);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .orbit-config-gate-ring { animation: none !important; }
+}
+
+.orbit-config-gate-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.orbit-config-gate-eyebrow {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent-strong);
+}
+.orbit-config-gate-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 650;
+  letter-spacing: -0.005em;
+  color: var(--text-strong);
+  line-height: 1.3;
+}
+.orbit-config-gate-body {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+  max-width: 56ch;
+}
+
+.orbit-config-gate-actions {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.orbit-config-gate-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  color: var(--btn-primary-fg, #fff);
+  background: linear-gradient(135deg, var(--accent) 0%, color-mix(in srgb, var(--accent) 70%, #000) 100%);
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+  box-shadow: 0 6px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.orbit-config-gate-action:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.05);
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.orbit-config-gate-action:focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 2px;
+}
+.orbit-config-gate-action svg {
+  transition: transform 160ms ease;
+}
+.orbit-config-gate-action:hover svg {
+  transform: translateX(2px);
+}
+
+@media (max-width: 620px) {
+  .orbit-config-gate {
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-rows: auto auto;
+    row-gap: 12px;
+  }
+  .orbit-config-gate-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
 /* ---------- 3b. First-run prompt (replaces the receipt when no runs yet) ----
    Designed to feel like a deliberate "this is what's coming" panel rather than
    a degraded receipt. Two balanced regions echo the hero's structure:
