@@ -143,6 +143,7 @@ test('prompt template retry preserves the edited body in project metadata', asyn
 
 test('live artifact empty connector CTA opens the gated connector setup path', async ({ page }) => {
   await routeConnectors(page, []);
+  await routeComposioConfig(page, { configured: false, apiKeyTail: '' });
 
   await gotoEntryHome(page);
   await page.getByTestId('new-project-tab-live-artifact').click();
@@ -157,15 +158,31 @@ test('live artifact empty connector CTA opens the gated connector setup path', a
   await expect(settingsDialog.getByRole('heading', { name: 'Connectors' })).toBeVisible();
   await expect(settingsDialog.getByPlaceholder('Paste Composio API key')).toBeVisible();
   await expect(settingsDialog.getByTestId('connector-gate')).toBeVisible();
-
-  // Gate CTA scrolls back up to + focuses the credentials field above the
-  // catalog (no second navigation, no second dialog).
-  await settingsDialog.getByTestId('connector-gate-action').click();
-  await expect(settingsDialog.getByPlaceholder('Paste Composio API key')).toBeFocused();
+  await expect(settingsDialog.getByTestId('connectors-search-input')).toBeDisabled();
 });
 
 test('connectors search supports empty results and keyboard-closeable details', async ({ page }) => {
   await routeConnectors(page, CONNECTORS);
+  await routeComposioConfig(page, { configured: true, apiKeyTail: '1234' });
+  await page.addInitScript((key) => {
+    const next = {
+      mode: 'daemon',
+      apiKey: '',
+      baseUrl: 'https://api.anthropic.com',
+      model: 'claude-sonnet-4-5',
+      agentId: 'mock',
+      skillId: null,
+      designSystemId: null,
+      onboardingCompleted: true,
+      agentModels: {},
+      composio: {
+        apiKey: '',
+        apiKeyConfigured: true,
+        apiKeyTail: '1234',
+      },
+    };
+    window.localStorage.setItem(key, JSON.stringify(next));
+  }, STORAGE_KEY);
 
   await page.goto('/');
   // Connector cards + search now live under Settings → Connectors. Open the
@@ -185,7 +202,7 @@ test('connectors search supports empty results and keyboard-closeable details', 
 
   await search.fill('missing connector');
   await expect(settingsDialog.getByTestId('connectors-empty')).toBeVisible();
-  await search.press('Escape');
+  await settingsDialog.getByTestId('connectors-search-clear').click();
   await expect(settingsDialog.getByTestId('connectors-empty')).toHaveCount(0);
   await expect(connectorCard(settingsDialog, 'github')).toBeVisible();
   await expect(connectorCard(settingsDialog, 'slack')).toBeVisible();
@@ -283,6 +300,20 @@ async function routeConnectors(page: Page, connectors: typeof CONNECTORS) {
 async function gotoEntryHome(page: Page) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.getByTestId('new-project-panel')).toBeVisible();
+}
+
+async function routeComposioConfig(
+  page: Page,
+  config: { configured: boolean; apiKeyTail?: string },
+) {
+  await page.route('**/api/connectors/composio/config', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({ json: config });
+      return;
+    }
+
+    await route.fulfill({ json: { ok: true } });
+  });
 }
 
 function connectorCard(scope: Page | Locator, id: string) {
