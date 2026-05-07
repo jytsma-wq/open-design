@@ -4,6 +4,7 @@ import {
   canRunProviderConnectionTest,
   deriveComposioCredentialState,
   configForManualOrbitRun,
+  isOrbitRunDisabled,
   isValidApiBaseUrl,
   shouldShowCustomModelInput,
   persistConfigAndRunOrbit,
@@ -387,6 +388,14 @@ describe('deriveComposioCredentialState', () => {
 });
 
 describe('SettingsDialog Orbit run behavior', () => {
+  it('keeps manual Orbit runs disabled while connector availability is still loading', () => {
+    expect(isOrbitRunDisabled(false, null)).toBe(true);
+  });
+
+  it('allows manual Orbit runs once loading finishes and a connector is available', () => {
+    expect(isOrbitRunDisabled(false, 1)).toBe(false);
+  });
+
   it('persists the current orbit template config before starting the run', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

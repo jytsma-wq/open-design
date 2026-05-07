@@ -2374,6 +2374,10 @@ export function configForManualOrbitRun(config: AppConfig): AppConfig {
   };
 }
 
+export function isOrbitRunDisabled(isBusy: boolean, connectedCount: number | null): boolean {
+  return isBusy || connectedCount === null || connectedCount === 0;
+}
+
 interface OrbitStatusResponse {
   running?: boolean;
   nextRunAt?: string | null;
@@ -2624,7 +2628,7 @@ function OrbitSection({
   // without any connector wired up surfaces a cryptic backend error. We
   // keep the button mounted so layout stays stable; a tooltip and the
   // adjacent gate make the disabled reason obvious.
-  const runDisabled = isBusy || showConfigGate;
+  const runDisabled = isOrbitRunDisabled(isBusy, connectedCount);
   const runDisabledTitle = showConfigGate
     ? t('settings.orbit.gateTitle')
     : t('settings.orbit.runTitle');
