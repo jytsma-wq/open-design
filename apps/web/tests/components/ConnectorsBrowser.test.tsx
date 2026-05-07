@@ -89,4 +89,24 @@ describe('ConnectorsBrowser', () => {
     await waitFor(() => expect(screen.getByText('List issues')).toBeTruthy());
     expect(screen.getAllByText('1 tool')).toHaveLength(2);
   });
+
+  it('stops showing the drawer loading state after discovery completes with zero tools', async () => {
+    vi.mocked(fetchConnectors).mockResolvedValue([configuredComposioConnector]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([configuredComposioConnector]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+
+    render(<ConnectorsBrowser composioConfigured />);
+
+    await screen.findByText('GitHub');
+    fireEvent.click(screen.getByRole('button', { name: 'Open GitHub details' }));
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          'No tools available yet. Connect to discover what this integration exposes.',
+        ),
+      ).toBeTruthy();
+      expect(screen.queryByText('Loading tools…')).toBeNull();
+    });
+  });
 });

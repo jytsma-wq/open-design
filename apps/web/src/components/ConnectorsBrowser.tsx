@@ -215,10 +215,6 @@ function applyConnectorStatuses(
   });
 }
 
-function hasAnyConnectorTools(connectors: ConnectorDetail[]): boolean {
-  return connectors.some((connector) => connector.tools.length > 0);
-}
-
 interface ConnectorsBrowserProps {
   composioConfigured: boolean;
   catalogRefreshKey?: string | number;
@@ -434,7 +430,7 @@ export function ConnectorsBrowser({
       const next = await fetchConnectorDiscovery({ refresh: true });
       if (cancelled) return;
       setConnectors((curr) => mergeConnectors(curr, next));
-      setToolsLoaded(hasAnyConnectorTools(next));
+      setToolsLoaded(true);
       setToolsLoading(false);
     })();
     return () => {
