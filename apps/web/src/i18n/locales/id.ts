@@ -150,6 +150,37 @@ export const id: Dict = {
   'settings.runtimePackaged': 'Aplikasi paket',
   'settings.runtimeDevelopment': 'Development',
   'settings.versionUnavailable': 'Detail versi tidak tersedia saat daemon offline.',
+  'settings.connectorsNavHint': 'Koneksi sistem eksternal',
+  'settings.connectorsHint': 'Kelola pengaturan konektor dan penyedia alat untuk perangkat ini.',
+  'settings.connectorsComposioApiKey': 'API key Composio',
+  'settings.connectorsSavedTitle': 'Tersimpan di daemon lokal',
+  'settings.connectorsSavedWithTail': 'Tersimpan · ••••{tail}',
+  'settings.connectorsSaved': 'Tersimpan',
+  'settings.connectorsGetApiKey': 'Dapatkan API key',
+  'settings.connectorsReplaceKeyPlaceholder': 'Tempel key baru untuk mengganti yang tersimpan',
+  'settings.connectorsApiKeyPlaceholder': 'Tempel API key Composio',
+  'settings.connectorsClear': 'Hapus',
+  'settings.connectorsClearConfirmTitle': 'Hapus API key Composio yang tersimpan?',
+  'settings.connectorsClearConfirmBody':
+    'Menghapus key akan memutus semua konektor Composio yang terkait dengan workspace ini. Akun terhubung, grant OAuth, dan akses alat semuanya akan dihapus.',
+  'settings.connectorsClearConfirmContinue': 'Lanjutkan',
+  'settings.connectorsClearFinalTitle': 'Ini akan memutus semua konektor',
+  'settings.connectorsClearFinalBody':
+    'Tindakan ini tidak bisa dibatalkan. Kamu harus menghubungkan ulang setiap integrasi dari awal setelah menempelkan key baru.',
+  'settings.connectorsClearFinalConfirm': 'Hapus key & putuskan koneksi',
+  'settings.connectorsClearArming': 'Tunggu…',
+  'settings.connectorsClearCancel': 'Batal',
+  'settings.connectorsSaveKey': 'Simpan key',
+  'settings.connectorsSaveKeyTitle': 'Kirim key ini ke daemon lokal',
+  'settings.connectorsKeySaving': 'Menyimpan…',
+  'settings.connectorsKeyError': 'Tidak bisa menyimpan key. Pastikan daemon lokal berjalan lalu coba lagi.',
+  'settings.connectorsHelpSaved':
+    'Key kamu tersimpan di daemon lokal. Tempel key baru untuk menggantinya, atau Hapus untuk menghapusnya.',
+  'settings.connectorsHelpUnsaved':
+    'Ada perubahan yang belum disimpan — klik Simpan key untuk menyimpan kredensial ini di daemon lokal dan menyegarkan katalog di bawah.',
+  'settings.connectorsHelpEmpty':
+    'Tambahkan key untuk memuat katalog di bawah. Key disimpan secara lokal di daemon dan tidak pernah dikirim lewat environment variable.',
+  'settings.connectorsLoadingSavedKey': 'Memeriksa key yang tersimpan di daemon lokal…',
 
   'entry.tabDesigns': 'Desain',
   'entry.tabExamples': 'Contoh',

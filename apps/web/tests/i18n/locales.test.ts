@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { en } from '../../src/i18n/locales/en';
+import { id } from '../../src/i18n/locales/id';
 import { LOCALES, LOCALE_LABEL, type Dict, type Locale } from '../../src/i18n/types';
 
 const EXPECTED_LOCALES = ['en', 'id', 'de', 'zh-CN', 'zh-TW', 'pt-BR', 'es-ES', 'ru', 'fa', 'ar', 'ja', 'ko', 'pl', 'hu', 'fr', 'uk', 'tr'];
@@ -46,6 +47,27 @@ describe('i18n locales', () => {
           placeholders(en[dictKey]),
         );
       }
+    }
+  });
+
+  it('keeps Indonesian connector settings copy translated instead of falling back to English', () => {
+    const translatedKeys: Array<keyof Dict> = [
+      'settings.connectorsNavHint',
+      'settings.connectorsHint',
+      'settings.connectorsComposioApiKey',
+      'settings.connectorsSavedTitle',
+      'settings.connectorsSaved',
+      'settings.connectorsGetApiKey',
+      'settings.connectorsApiKeyPlaceholder',
+      'settings.connectorsClear',
+      'settings.connectorsSaveKey',
+      'settings.connectorsKeyError',
+      'settings.connectorsHelpEmpty',
+      'settings.connectorsLoadingSavedKey',
+    ];
+
+    for (const key of translatedKeys) {
+      expect(id[key], key).not.toBe(en[key]);
     }
   });
 });
