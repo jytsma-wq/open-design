@@ -38,6 +38,7 @@ function mockComposioFetch(options = {}) {
     createAuthConfigResponse,
     delayFirstAuthConfigs,
     delayFirstToolkits,
+    logoFetch,
     linkResponse = { connected_account_id: 'ca_github', status: 'ACTIVE', account_label: 'octocat@example.com' },
   } = options;
   composioDiscoveryRequestCounts = { authConfigs: 0, createdAuthConfigs: 0, toolkits: 0, tools: 0 };
@@ -47,6 +48,13 @@ function mockComposioFetch(options = {}) {
       return originalFetch(input, init);
     }
     const parsed = new URL(url);
+    if (parsed.hostname === 'logos.composio.dev') {
+      if (logoFetch) return await logoFetch(parsed, init);
+      return new Response('<svg xmlns="http://www.w3.org/2000/svg"></svg>', {
+        status: 200,
+        headers: { 'content-type': 'image/svg+xml' },
+      });
+    }
     if (parsed.pathname === '/api/v3/auth_configs') {
       composioDiscoveryRequestCounts.authConfigs += 1;
       if (delayFirstAuthConfigs && composioDiscoveryRequestCounts.authConfigs === 1) {
@@ -508,6 +516,49 @@ describe('connector routes', () => {
     expect(JSON.parse(response.body).auth).toMatchObject({ kind: 'connected' });
     expect(lastComposioLinkRequest.callback_url).toContain(`127.0.0.2:${url.port}/api/connectors/oauth/callback`);
   });
+
+  it('times out stalled Composio logo fetches and clears the inflight entry', async () => {
+    let upstreamRequests = 0;
+    let firstRequestAborted = false;
+    mockComposioFetch({
+      logoFetch: async (_parsed, init) => {
+        upstreamRequests += 1;
+        if (upstreamRequests === 1) {
+          await new Promise((_, reject) => {
+            if (!init?.signal) {
+              reject(new Error('expected fetch timeout signal'));
+              return;
+            }
+            const abort = () => {
+              firstRequestAborted = true;
+              reject(init.signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+            };
+            if (init.signal.aborted) {
+              abort();
+              return;
+            }
+            init.signal.addEventListener('abort', abort, { once: true });
+          });
+        }
+        return new Response('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>', {
+          status: 200,
+          headers: { 'content-type': 'image/svg+xml' },
+        });
+      },
+    });
+
+    const firstRequestPromise = fetch(`${baseUrl}/api/connectors/logos/github?theme=dark`);
+    const firstResponse = await firstRequestPromise;
+
+    expect(firstRequestAborted).toBe(true);
+    expect(firstResponse.status).toBe(404);
+
+    const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/github?theme=dark`);
+
+    expect(secondResponse.status).toBe(200);
+    expect(await secondResponse.text()).toContain('<rect');
+    expect(upstreamRequests).toBe(2);
+  }, 15_000);
 
   it('lists connected Composio tools through run-scoped tool auth', async () => {
     await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });

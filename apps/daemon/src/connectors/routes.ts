@@ -23,6 +23,7 @@ type ConnectorApiErrorCode =
   | 'CONNECTOR_EXECUTION_FAILED';
 
 const COMPOSIO_LOGO_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
+const COMPOSIO_LOGO_FETCH_TIMEOUT_MS = 2_000;
 const COMPOSIO_LOGO_SLUG_ALIASES: Record<string, string> = {
   zohobooks: 'zoho_books',
 };
@@ -95,6 +96,10 @@ function sendComposioLogo(res: Response, logo: CachedComposioLogo): void {
   res.send(logo.body);
 }
 
+function isAbortLikeError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
+}
+
 async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise<CachedComposioLogo | null> {
   const cacheKey = `${slug}:${theme}`;
   const cached = composioLogoCache.get(cacheKey);
@@ -105,9 +110,20 @@ async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise
 
   const promise = (async () => {
     const upstream = `https://logos.composio.dev/api/${encodeURIComponent(slug)}?theme=${theme}`;
-    const response = await fetch(upstream, {
-      headers: { accept: 'image/svg+xml,image/*;q=0.8,*/*;q=0.5' },
-    });
+    let response: globalThis.Response;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), COMPOSIO_LOGO_FETCH_TIMEOUT_MS);
+    try {
+      response = await fetch(upstream, {
+        headers: { accept: 'image/svg+xml,image/*;q=0.8,*/*;q=0.5' },
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (isAbortLikeError(error)) return null;
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
     if (!response.ok) return null;
     const body = Buffer.from(await response.arrayBuffer());
     const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'image/svg+xml';
