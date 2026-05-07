@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { describe, expect, it, vi } from 'vitest';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -126,5 +126,41 @@ describe('composio config', () => {
         curation: expect.objectContaining({ useCases: ['personal_daily_digest'] }),
       })],
     });
+  });
+
+  it('does not hydrate persisted catalog cache before the runtime data directory is configured', async () => {
+    const defaultCacheDir = path.join(process.cwd(), '.od', 'connectors');
+    const defaultCachePath = path.join(defaultCacheDir, 'composio-catalog-cache.json');
+    const dir = await useTempComposioStore();
+    await mkdir(defaultCacheDir, { recursive: true });
+    await writeFile(defaultCachePath, JSON.stringify({
+      schemaVersion: 1,
+      provider: 'composio',
+      fetchedAt: '2026-05-07T00:00:00.000Z',
+      definitions: [composioDefinition('wrong-tenant')],
+    }, null, 2));
+
+    try {
+      vi.resetModules();
+      const composioModule = await import('../src/connectors/composio.js');
+
+      expect(composioModule.composioConnectorProvider.getFastDefinitions().find((definition) => definition.id === 'wrong-tenant')).toBeUndefined();
+
+      await mkdir(path.join(dir, 'connectors'), { recursive: true });
+      await writeFile(path.join(dir, 'connectors', 'composio-catalog-cache.json'), JSON.stringify({
+        schemaVersion: 1,
+        provider: 'composio',
+        fetchedAt: '2026-05-07T00:00:00.000Z',
+        definitions: [composioDefinition('right-tenant')],
+      }, null, 2));
+
+      composioModule.composioConnectorProvider.configureCatalogCache(dir);
+
+      expect(composioModule.composioConnectorProvider.getFastDefinitions().find((definition) => definition.id === 'right-tenant')).toMatchObject({
+        id: 'right-tenant',
+      });
+    } finally {
+      await rm(defaultCachePath, { force: true });
+    }
   });
 });

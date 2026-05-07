@@ -422,10 +422,6 @@ export class ComposioConnectorProvider {
   private refreshTimer: NodeJS.Timeout | undefined;
   private refreshTimeout: NodeJS.Timeout | undefined;
 
-  constructor() {
-    this.loadPersistedCatalogCache();
-  }
-
   isConfigured(definition: ConnectorCatalogDefinition): boolean {
     return Boolean(this.getApiKey() && this.discoveredAuthConfigIds?.[definition.id]);
   }
