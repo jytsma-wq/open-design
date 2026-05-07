@@ -332,6 +332,7 @@ export function App() {
       })
         ? syncMediaProvidersToDaemon(persisted.mediaProviders, {
             force: options?.forceMediaProviderSync,
+            throwOnError: options?.forceMediaProviderSync,
           })
         : Promise.resolve(),
       syncConfigToDaemon(persisted),

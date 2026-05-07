@@ -848,9 +848,11 @@ export function SettingsDialog({
   const autosaveSkipFirstRef = useRef(true);
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveSavedTimerRef = useRef<number | null>(null);
+  const autosaveRetryTimerRef = useRef<number | null>(null);
   const autosaveLatestRef = useRef<AppConfig>(cfg);
   const mediaProvidersChangeVersionRef = useRef(0);
   const lastSyncedMediaProvidersVersionRef = useRef(0);
+  const [autosaveRetryTick, setAutosaveRetryTick] = useState(0);
   autosaveLatestRef.current = cfg;
   useEffect(() => {
     if (autosaveSkipFirstRef.current) {
@@ -861,6 +863,10 @@ export function SettingsDialog({
     if (autosaveSavedTimerRef.current != null) {
       window.clearTimeout(autosaveSavedTimerRef.current);
       autosaveSavedTimerRef.current = null;
+    }
+    if (autosaveRetryTimerRef.current != null) {
+      window.clearTimeout(autosaveRetryTimerRef.current);
+      autosaveRetryTimerRef.current = null;
     }
     if (autosaveTimerRef.current != null) {
       window.clearTimeout(autosaveTimerRef.current);
@@ -894,6 +900,26 @@ export function SettingsDialog({
             setAutosaveStatus((curr) => (curr === 'saved' ? 'idle' : curr));
           }, 1800);
         } catch {
+          if (
+            persistOptions.forceMediaProviderSync
+            && autosaveLatestRef.current === snapshot
+            && mediaProvidersChangeVersionRef.current === mediaProvidersVersion
+            && lastSyncedMediaProvidersVersionRef.current < mediaProvidersVersion
+          ) {
+            setAutosaveStatus('pending');
+            autosaveRetryTimerRef.current = window.setTimeout(() => {
+              autosaveRetryTimerRef.current = null;
+              if (
+                autosaveLatestRef.current !== snapshot
+                || mediaProvidersChangeVersionRef.current !== mediaProvidersVersion
+                || lastSyncedMediaProvidersVersionRef.current >= mediaProvidersVersion
+              ) {
+                return;
+              }
+              setAutosaveRetryTick((tick) => tick + 1);
+            }, 1500);
+            return;
+          }
           setAutosaveStatus('error');
         }
       })();
@@ -904,7 +930,7 @@ export function SettingsDialog({
         autosaveTimerRef.current = null;
       }
     };
-  }, [cfg, onPersist]);
+  }, [cfg, onPersist, autosaveRetryTick]);
   // Flush any pending autosave on unmount so a fast-closing dialog
   // never strands an in-flight edit. We also clear the "Saved" toast
   // timer to avoid setState after unmount.
@@ -924,6 +950,10 @@ export function SettingsDialog({
       if (autosaveSavedTimerRef.current != null) {
         window.clearTimeout(autosaveSavedTimerRef.current);
         autosaveSavedTimerRef.current = null;
+      }
+      if (autosaveRetryTimerRef.current != null) {
+        window.clearTimeout(autosaveRetryTimerRef.current);
+        autosaveRetryTimerRef.current = null;
       }
     };
   }, [onPersist]);

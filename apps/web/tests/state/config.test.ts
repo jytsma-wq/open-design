@@ -5,6 +5,7 @@ import {
   mergeDaemonConfig,
   syncComposioConfigToDaemon,
   syncConfigToDaemon,
+  syncMediaProvidersToDaemon,
 } from '../../src/state/config';
 import type { AppConfig } from '../../src/types';
 
@@ -94,6 +95,21 @@ describe('syncConfigToDaemon', () => {
         codex: { CODEX_HOME: '~/.codex-alt', CODEX_BIN: '~/bin/codex-next' },
       },
     });
+  });
+});
+
+describe('syncMediaProvidersToDaemon', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.stubGlobal('fetch', originalFetch);
+  });
+
+  it('throws when a forced media sync fails', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 503 })));
+
+    await expect(
+      syncMediaProvidersToDaemon({}, { force: true, throwOnError: true }),
+    ).rejects.toThrow('Media config save failed');
   });
 });
 
