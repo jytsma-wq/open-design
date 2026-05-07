@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
 import { LOCALE_LABEL, LOCALES, useI18n } from '../i18n';
 import type { Locale } from '../i18n';
@@ -2534,23 +2534,32 @@ function OrbitSection({
     };
   }, []);
 
-  // Fetch the connector catalog once on mount to determine whether the Orbit
+  const refreshConnectedCount = useCallback(async () => {
+    const list = await fetchConnectors();
+    if (!isMountedRef.current) return;
+    const connected = list.filter((c) => c.status === 'connected').length;
+    setConnectedCount(connected);
+  }, []);
+
+  // Fetch the connector catalog on mount to determine whether the Orbit
   // configuration gate should render. fetchConnectors swallows errors and
   // returns []; if the daemon is offline we treat that as "0 connected" and
   // surface the gate so the user has a clear path forward instead of being
   // dropped into a broken Orbit configuration.
   useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const list = await fetchConnectors();
-      if (!alive) return;
-      const connected = list.filter((c) => c.status === 'connected').length;
-      setConnectedCount(connected);
-    })();
-    return () => {
-      alive = false;
+    void refreshConnectedCount();
+  }, [refreshConnectedCount]);
+
+  // Connector auth often completes in another window. Re-check when focus
+  // returns so the Orbit gate reflects newly connected accounts without
+  // requiring the user to close and reopen Settings.
+  useEffect(() => {
+    const onFocus = () => {
+      void refreshConnectedCount();
     };
-  }, []);
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, [refreshConnectedCount]);
 
   // The id used to drive the prompt template — coalesces a null/empty
   // saved value to the built-in default (DEFAULT_ORBIT.templateSkillId,
