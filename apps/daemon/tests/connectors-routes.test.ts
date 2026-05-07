@@ -560,6 +560,37 @@ describe('connector routes', () => {
     expect(upstreamRequests).toBe(2);
   }, 15_000);
 
+  it('rejects non-image Composio logo responses without caching them', async () => {
+    let upstreamRequests = 0;
+    const slug = 'html_only_logo';
+    mockComposioFetch({
+      logoFetch: async () => {
+        upstreamRequests += 1;
+        if (upstreamRequests === 1) {
+          return new Response('<html><body>oops</body></html>', {
+            status: 200,
+            headers: { 'content-type': 'text/html; charset=utf-8' },
+          });
+        }
+        return new Response('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>', {
+          status: 200,
+          headers: { 'content-type': 'image/svg+xml' },
+        });
+      },
+    });
+
+    const firstResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(firstResponse.status).toBe(404);
+
+    const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get('content-type')).toContain('image/svg+xml');
+    expect(await secondResponse.text()).toContain('<rect');
+    expect(upstreamRequests).toBe(2);
+  });
+
   it('lists connected Composio tools through run-scoped tool auth', async () => {
     await jsonFetch(`${baseUrl}/api/connectors/github/connect`, { method: 'POST' });
     const token = mintConnectorToolToken();

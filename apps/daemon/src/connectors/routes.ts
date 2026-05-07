@@ -96,6 +96,12 @@ function sendComposioLogo(res: Response, logo: CachedComposioLogo): void {
   res.send(logo.body);
 }
 
+function normalizeImageContentType(value: string | null): string | null {
+  const contentType = value?.split(';')[0]?.trim().toLowerCase();
+  if (!contentType?.startsWith('image/')) return null;
+  return contentType === 'image/svg+xml' ? 'image/svg+xml; charset=utf-8' : contentType;
+}
+
 function isAbortLikeError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
 }
@@ -126,10 +132,11 @@ async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise
     }
     if (!response.ok) return null;
     const body = Buffer.from(await response.arrayBuffer());
-    const contentType = response.headers.get('content-type')?.split(';')[0]?.trim() || 'image/svg+xml';
+    const contentType = normalizeImageContentType(response.headers.get('content-type'));
+    if (!contentType) return null;
     const logo: CachedComposioLogo = {
       body,
-      contentType: contentType === 'image/svg+xml' ? 'image/svg+xml; charset=utf-8' : contentType,
+      contentType,
       expiresAtMs: Date.now() + COMPOSIO_LOGO_CACHE_TTL_MS,
     };
     composioLogoCache.set(cacheKey, logo);
