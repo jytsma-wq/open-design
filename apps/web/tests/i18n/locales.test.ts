@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { en } from '../../src/i18n/locales/en';
 import { id } from '../../src/i18n/locales/id';
@@ -24,6 +25,11 @@ async function loadDict(locale: Locale): Promise<Dict> {
     throw new Error(`No dictionary export found for locale ${locale}`);
   }
   return dict;
+}
+
+function explicitLocaleKeys(locale: Locale): string[] {
+  const source = readFileSync(new URL(`../../src/i18n/locales/${locale}.ts`, import.meta.url), 'utf8');
+  return Array.from(source.matchAll(/'([^']+)':/g), (match) => match[1] ?? '').filter(Boolean);
 }
 
 describe('i18n locales', () => {
@@ -105,5 +111,14 @@ describe('i18n locales', () => {
     for (const key of translatedKeys) {
       expect(id[key], key).not.toBe(en[key]);
     }
+  });
+
+  it('declares CI-sensitive Indonesian fallback keys explicitly', () => {
+    const explicitKeys = new Set(explicitLocaleKeys('id'));
+    const requiredExplicitKeys = Object.keys(en).filter((key) => {
+      return key.startsWith('connectors.category.') || key.startsWith('liveArtifact.viewer.');
+    });
+
+    expect(requiredExplicitKeys.filter((key) => !explicitKeys.has(key))).toEqual([]);
   });
 });
