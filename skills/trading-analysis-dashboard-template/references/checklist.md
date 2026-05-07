@@ -6,10 +6,10 @@
 - [ ] Dense trading layout exists: left sidebar + top status + multi-panel body.
 - [ ] Light/Dark switch works and persists in `localStorage`.
 - [ ] Live/Demo mode switch works (demo changes at least one KPI and one chart state).
-- [ ] At least 3 chart regions include:
-  - [ ] axis labels
-  - [ ] units / scale hints
-  - [ ] chart legends
+- [ ] At least 2 chart regions include:
+  - [ ] axis labels (x and y)
+  - [ ] units / scale hints (e.g., `$`, `%`, `Δ`)
+  - [ ] chart legends naming each plotted series
 - [ ] At least one chart supports hover crosshair + tooltip-like readout.
 - [ ] At least one chart supports click-to-focus (floating/overlay) and close.
 - [ ] Risk cockpit panel shows exposure-style metrics (VaR/Beta/DD or equivalent).

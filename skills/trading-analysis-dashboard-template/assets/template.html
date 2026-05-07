@@ -43,6 +43,11 @@
     .chart-shell{position:relative}
     .chart{margin-top:8px;height:200px;border:1px solid var(--line);border-radius:10px;background:color-mix(in srgb,var(--chip) 50%,transparent)}
     .chart svg{width:100%;height:100%}
+    .chart svg .axis-text{font:600 9px "JetBrains Mono",ui-monospace,monospace;fill:var(--muted);letter-spacing:.04em}
+    .chart svg .axis-title{font:700 9px Inter,system-ui,sans-serif;fill:var(--muted);letter-spacing:.08em;text-transform:uppercase}
+    .legend{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:6px;padding:0 4px;font-size:10px;color:var(--muted);letter-spacing:.04em}
+    .legend .lg{display:inline-flex;align-items:center;gap:6px;font-weight:700}
+    .legend .lg::before{content:"";width:10px;height:2px;background:var(--lg-c,var(--accent));border-radius:2px;display:inline-block}
     .cursor{position:absolute;inset:0;pointer-events:none;opacity:0}
     .chart-shell.active .cursor{opacity:1}
     .cursor .vx,.cursor .hy{position:absolute;background:color-mix(in srgb,var(--accent) 80%,transparent)}
@@ -116,21 +121,60 @@
           <div class="card chart-shell">
             <div class="k">Option Greeks</div>
             <div class="chart chart-interactive">
-              <svg viewBox="0 0 400 200"><g stroke="var(--line)"><line x1="30" y1="170" x2="390" y2="170"/><line x1="30" y1="20" x2="30" y2="170"/></g>
+              <svg viewBox="0 0 400 200" role="img" aria-label="Option Greeks: Delta and Gamma vs Strike">
+                <title>Option Greeks vs Strike</title>
+                <g stroke="var(--line)"><line x1="30" y1="170" x2="390" y2="170"/><line x1="30" y1="20" x2="30" y2="170"/></g>
+                <g class="axis-text" text-anchor="middle">
+                  <text x="40" y="186">145</text>
+                  <text x="120" y="186">150</text>
+                  <text x="200" y="186">155</text>
+                  <text x="300" y="186">160</text>
+                  <text x="380" y="186">165</text>
+                </g>
+                <g class="axis-text" text-anchor="end">
+                  <text x="26" y="44">1.0</text>
+                  <text x="26" y="96">0.5</text>
+                  <text x="26" y="148">0.0</text>
+                  <text x="26" y="174">−0.5</text>
+                </g>
+                <text class="axis-title" x="210" y="198" text-anchor="middle">Strike ($)</text>
+                <text class="axis-title" x="-100" y="12" transform="rotate(-90)" text-anchor="middle">Sensitivity (Δ / Γ)</text>
                 <polyline fill="none" stroke="#9b79f4" stroke-width="3" points="40,40 120,62 200,92 300,122 380,146"/>
                 <polyline fill="none" stroke="#67d59b" stroke-width="3" points="40,128 120,124 200,118 300,129 380,126"/>
                 <circle class="link-target strike-150" cx="200" cy="92" r="4" fill="#9b79f4"/>
                 <circle class="link-target strike-155" cx="300" cy="122" r="4" fill="#9b79f4"/>
                 <circle class="link-target strike-160" cx="380" cy="146" r="4" fill="#9b79f4"/>
               </svg>
-            </div><div class="cursor"><span class="vx"></span><span class="hy"></span><span class="lb">x:0 y:0</span></div>
+            </div>
+            <div class="legend"><span class="lg" style="--lg-c:#9b79f4">Delta (Δ)</span><span class="lg" style="--lg-c:#67d59b">Gamma (Γ)</span></div>
+            <div class="cursor"><span class="vx"></span><span class="hy"></span><span class="lb">x:0 y:0</span></div>
           </div>
           <div class="card chart-shell">
             <div class="k">Cumulative PnL</div>
             <div class="chart chart-interactive">
-              <svg viewBox="0 0 400 200"><g stroke="var(--line)"><line x1="30" y1="170" x2="390" y2="170"/><line x1="30" y1="20" x2="30" y2="170"/></g>
-                <polyline id="eq" fill="none" stroke="#47cf93" stroke-width="3" points="30,150 90,142 150,130 210,118 270,95 330,78 390,62"/></svg>
-            </div><div class="cursor"><span class="vx"></span><span class="hy"></span><span class="lb">x:0 y:0</span></div>
+              <svg viewBox="0 0 400 200" role="img" aria-label="Cumulative PnL by session time">
+                <title>Cumulative PnL by Session Time</title>
+                <g stroke="var(--line)"><line x1="30" y1="170" x2="390" y2="170"/><line x1="30" y1="20" x2="30" y2="170"/></g>
+                <g class="axis-text" text-anchor="middle">
+                  <text x="30" y="186">09:30</text>
+                  <text x="120" y="186">11:00</text>
+                  <text x="210" y="186">12:30</text>
+                  <text x="300" y="186">14:00</text>
+                  <text x="390" y="186">16:00</text>
+                </g>
+                <g class="axis-text" text-anchor="end">
+                  <text x="26" y="62">$24k</text>
+                  <text x="26" y="100">$16k</text>
+                  <text x="26" y="138">$8k</text>
+                  <text x="26" y="174">$0</text>
+                </g>
+                <text class="axis-title" x="210" y="198" text-anchor="middle">Session Time (ET)</text>
+                <text class="axis-title" x="-100" y="12" transform="rotate(-90)" text-anchor="middle">Equity ($, USD)</text>
+                <polyline id="eq" fill="none" stroke="#47cf93" stroke-width="3" points="30,150 90,142 150,130 210,118 270,95 330,78 390,62"/>
+              </svg>
+            </div>
+            <div class="legend"><span class="lg" style="--lg-c:#47cf93">Equity Curve ($)</span></div>
+            <div class="cursor"><span class="vx"></span><span class="hy"></span><span class="lb">x:0 y:0</span></div>
           </div>
           <div class="card">
             <div class="k">Risk Cockpit</div>
