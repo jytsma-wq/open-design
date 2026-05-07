@@ -2355,10 +2355,6 @@ interface OrbitRunStartResponse {
 export async function persistConfigAndRunOrbit(
   config: AppConfig,
 ): Promise<OrbitRunStartResponse> {
-  if (config.composio !== undefined) {
-    const composioSaved = await syncComposioConfigToDaemon(config.composio);
-    if (!composioSaved) throw new Error('Composio config save failed');
-  }
   await syncMediaProvidersToDaemon(config.mediaProviders, { force: true, throwOnError: true });
   await syncConfigToDaemon(config, { throwOnError: true });
   const response = await fetch('/api/orbit/run', { method: 'POST' });

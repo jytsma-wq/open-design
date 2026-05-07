@@ -433,7 +433,7 @@ describe('SettingsDialog Orbit run behavior', () => {
     });
   });
 
-  it('persists daemon-backed settings before starting a manual Orbit run', async () => {
+  it('does not sync an unsaved Composio draft before starting a manual Orbit run', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -441,9 +441,6 @@ describe('SettingsDialog Orbit run behavior', () => {
       const body = typeof init?.body === 'string' ? init.body : undefined;
       calls.push({ url, method, body });
 
-      if (url === '/api/connectors/composio/config') {
-        return new Response(null, { status: 204 });
-      }
       if (url === '/api/media/config') {
         return new Response(null, { status: 204 });
       }
@@ -472,13 +469,11 @@ describe('SettingsDialog Orbit run behavior', () => {
     ).resolves.toEqual({ projectId: 'orbit-project', agentRunId: 'run-3' });
 
     expect(calls.map((call) => call.url)).toEqual([
-      '/api/connectors/composio/config',
       '/api/media/config',
       '/api/app-config',
       '/api/orbit/run',
     ]);
-    expect(JSON.parse(calls[0]!.body ?? '{}')).toEqual({ apiKey: 'cmp_new_key' });
-    expect(JSON.parse(calls[1]!.body ?? '{}')).toMatchObject({ force: true });
+    expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({ force: true });
   });
 
   it('syncs an explicit empty media provider map before starting a manual Orbit run', async () => {
@@ -520,12 +515,12 @@ describe('SettingsDialog Orbit run behavior', () => {
     });
   });
 
-  it('does not start a manual Orbit run when saving Composio credentials fails', async () => {
+  it('does not start a manual Orbit run when saving app config fails', async () => {
     const calls: string[] = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === 'string' ? input : input.toString();
       calls.push(url);
-      if (url === '/api/connectors/composio/config') {
+      if (url === '/api/app-config') {
         return new Response(null, { status: 500 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -536,9 +531,9 @@ describe('SettingsDialog Orbit run behavior', () => {
         ...baseConfig,
         composio: { apiKey: 'cmp_new_key', apiKeyConfigured: false },
       }),
-    ).rejects.toThrow('Composio config save failed');
+    ).rejects.toThrow('Failed to sync app config (500)');
 
-    expect(calls).toEqual(['/api/connectors/composio/config']);
+    expect(calls).toEqual(['/api/app-config']);
   });
 
   it('does not start a manual Orbit run when saving media credentials fails', async () => {
