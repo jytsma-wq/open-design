@@ -536,13 +536,19 @@ describe('SettingsDialog Orbit run behavior', () => {
     expect(calls).toEqual(['/api/app-config']);
   });
 
-  it('does not start a manual Orbit run when saving media credentials fails', async () => {
-    const calls: string[] = [];
-    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+  it('still starts a manual Orbit run when saving media credentials fails', async () => {
+    const calls: Array<{ url: string; method: string }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
-      calls.push(url);
+      calls.push({ url, method: init?.method ?? 'GET' });
       if (url === '/api/media/config') {
         return new Response(null, { status: 500 });
+      }
+      if (url === '/api/app-config') {
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/orbit/run') {
+        return new Response(JSON.stringify({ projectId: 'orbit-project', agentRunId: 'run-media-failed' }), { status: 200 });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }) as typeof fetch;
@@ -554,9 +560,13 @@ describe('SettingsDialog Orbit run behavior', () => {
           openai: { apiKey: 'media-key', baseUrl: '' },
         },
       }),
-    ).rejects.toThrow('Media config save failed');
+    ).resolves.toEqual({ projectId: 'orbit-project', agentRunId: 'run-media-failed' });
 
-    expect(calls).toEqual(['/api/media/config']);
+    expect(calls).toEqual([
+      { url: '/api/media/config', method: 'PUT' },
+      { url: '/api/app-config', method: 'PUT' },
+      { url: '/api/orbit/run', method: 'POST' },
+    ]);
   });
 
   it('persists the displayed default template before starting a legacy null-template run', async () => {

@@ -2355,7 +2355,7 @@ interface OrbitRunStartResponse {
 export async function persistConfigAndRunOrbit(
   config: AppConfig,
 ): Promise<OrbitRunStartResponse> {
-  await syncMediaProvidersToDaemon(config.mediaProviders, { force: true, throwOnError: true });
+  await syncMediaProvidersToDaemon(config.mediaProviders, { force: true });
   await syncConfigToDaemon(config, { throwOnError: true });
   const response = await fetch('/api/orbit/run', { method: 'POST' });
   if (!response.ok) throw new Error('Orbit run failed');
