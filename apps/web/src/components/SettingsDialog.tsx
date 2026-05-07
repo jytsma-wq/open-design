@@ -1560,12 +1560,12 @@ export function SettingsDialog({
             <OrbitSection
               cfg={cfg}
               setCfg={setCfg}
-              onLeaveForOrbitProject={() => {
+              onLeaveForOrbitProject={(runConfig) => {
                 // Persist any in-flight Orbit edits (toggle / time) before
                 // navigating away so they aren't silently lost. onSave also
                 // closes the dialog, so the user lands directly on the
                 // /projects/orbit view where the agent run streams in.
-                onSave(cfg);
+                onSave(runConfig);
               }}
             />
           ) : null}
@@ -1922,7 +1922,7 @@ function OrbitSection({
   setCfg: Dispatch<SetStateAction<AppConfig>>;
   /** Called right before navigating to the generated Orbit project so the
    *  parent dialog can persist any unsaved Orbit edits and close itself. */
-  onLeaveForOrbitProject: () => void;
+  onLeaveForOrbitProject: (runConfig: AppConfig) => void;
 }) {
   const orbit = cfg.orbit ?? DEFAULT_ORBIT;
   const [status, setStatus] = useState<OrbitStatusResponse | null>(null);
@@ -2016,10 +2016,11 @@ function OrbitSection({
 
     void (async () => {
       try {
-        const payload = await persistConfigAndRunOrbit(configForManualOrbitRun(cfg));
+        const runConfig = configForManualOrbitRun(cfg);
+        const payload = await persistConfigAndRunOrbit(runConfig);
         if (!payload.projectId) throw new Error('Orbit run did not return a project');
 
-        onLeaveForOrbitProject();
+        onLeaveForOrbitProject(runConfig);
         navigateRoute({
           kind: 'project',
           projectId: payload.projectId,
