@@ -93,8 +93,16 @@ export const DEFAULT_ORBIT_CONFIG: OrbitConfigPrefs = {
 
 const SUMMARY_FILE = 'activity-summary.json';
 
+function isValidOrbitTime(time: string): boolean {
+  const match = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!match) return false;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
 function normalizeOrbitConfig(config: Partial<OrbitConfigPrefs> | undefined): OrbitConfigPrefs {
-  const time = typeof config?.time === 'string' && /^\d{2}:\d{2}$/.test(config.time)
+  const time = typeof config?.time === 'string' && isValidOrbitTime(config.time)
     ? config.time
     : DEFAULT_ORBIT_CONFIG.time;
   const hasTemplateSkillId = config !== undefined && 'templateSkillId' in config;

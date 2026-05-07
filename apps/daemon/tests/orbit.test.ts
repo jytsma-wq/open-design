@@ -81,6 +81,22 @@ describe('OrbitService', () => {
     }
   });
 
+  it('falls back to the default time when config has an out-of-range time', async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'orbit-test-'));
+    try {
+      const service = new OrbitService(dataDir);
+
+      service.configure({ enabled: true, time: '24:99' });
+
+      await expect(service.status()).resolves.toMatchObject({
+        config: { time: '08:00' },
+      });
+      service.stop();
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('reschedules after an early scheduled start rejection', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 4, 6, 7, 59, 0, 0));

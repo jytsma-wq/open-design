@@ -104,6 +104,25 @@ describe('app-config', () => {
       expect(cfg.orbit).not.toHaveProperty('templateSkillId');
     });
 
+    it('falls back to default orbit time for out-of-range stored values', async () => {
+      await writeFile(
+        path.join(dataDir, 'app-config.json'),
+        JSON.stringify({
+          orbit: {
+            enabled: true,
+            time: '99:99',
+          },
+        }),
+      );
+
+      const cfg = await readAppConfig(dataDir);
+
+      expect(cfg.orbit).toEqual({
+        enabled: true,
+        time: '08:00',
+      });
+    });
+
     it('preserves explicit orbit.templateSkillId null and trimmed string', async () => {
       await writeFile(
         path.join(dataDir, 'app-config.json'),

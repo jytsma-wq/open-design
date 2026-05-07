@@ -107,12 +107,20 @@ export function validateAgentCliEnv(raw: unknown): AgentCliEnvPrefs | undefined 
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function isValidOrbitTime(time: string): boolean {
+  const match = /^(\d{2}):(\d{2})$/.exec(time);
+  if (!match) return false;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  return hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
+
 function validateOrbit(raw: unknown): OrbitConfigPrefs | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) return undefined;
   const obj = raw as Record<string, unknown>;
   const enabled = typeof obj.enabled === 'boolean' ? obj.enabled : false;
-  const time = typeof obj.time === 'string' && /^\d{2}:\d{2}$/.test(obj.time)
+  const time = typeof obj.time === 'string' && isValidOrbitTime(obj.time)
     ? obj.time
     : '08:00';
   const orbit: OrbitConfigPrefs = { enabled, time };
