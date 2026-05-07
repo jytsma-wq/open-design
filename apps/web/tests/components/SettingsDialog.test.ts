@@ -433,6 +433,98 @@ describe('SettingsDialog Orbit run behavior', () => {
     });
   });
 
+  it('persists daemon-backed settings before starting a manual Orbit run', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? init.body : undefined;
+      calls.push({ url, method, body });
+
+      if (url === '/api/connectors/composio/config') {
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/media/config') {
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/app-config') {
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/orbit/run') {
+        return new Response(JSON.stringify({ projectId: 'orbit-project', agentRunId: 'run-3' }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(
+      persistConfigAndRunOrbit({
+        ...baseConfig,
+        composio: { apiKey: 'cmp_new_key', apiKeyConfigured: false },
+        mediaProviders: {
+          openai: { apiKey: 'media-key', baseUrl: '' },
+        },
+        orbit: {
+          enabled: true,
+          time: '09:30',
+          templateSkillId: 'orbit-template-1',
+        },
+      }),
+    ).resolves.toEqual({ projectId: 'orbit-project', agentRunId: 'run-3' });
+
+    expect(calls.map((call) => call.url)).toEqual([
+      '/api/connectors/composio/config',
+      '/api/media/config',
+      '/api/app-config',
+      '/api/orbit/run',
+    ]);
+    expect(JSON.parse(calls[0]!.body ?? '{}')).toEqual({ apiKey: 'cmp_new_key' });
+    expect(JSON.parse(calls[1]!.body ?? '{}')).toMatchObject({ force: true });
+  });
+
+  it('does not start a manual Orbit run when saving Composio credentials fails', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      calls.push(url);
+      if (url === '/api/connectors/composio/config') {
+        return new Response(null, { status: 500 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(
+      persistConfigAndRunOrbit({
+        ...baseConfig,
+        composio: { apiKey: 'cmp_new_key', apiKeyConfigured: false },
+      }),
+    ).rejects.toThrow('Composio config save failed');
+
+    expect(calls).toEqual(['/api/connectors/composio/config']);
+  });
+
+  it('does not start a manual Orbit run when saving media credentials fails', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      calls.push(url);
+      if (url === '/api/media/config') {
+        return new Response(null, { status: 500 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(
+      persistConfigAndRunOrbit({
+        ...baseConfig,
+        mediaProviders: {
+          openai: { apiKey: 'media-key', baseUrl: '' },
+        },
+      }),
+    ).rejects.toThrow('Media config save failed');
+
+    expect(calls).toEqual(['/api/media/config']);
+  });
+
   it('persists the displayed default template before starting a legacy null-template run', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

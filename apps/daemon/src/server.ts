@@ -5605,39 +5605,54 @@ export async function startServer({ port = 7456, host = process.env.OD_BIND_HOST
   //   - `apps/daemon/sidecar/server.ts`     → expects `{ url, server }`
   //   - `apps/daemon/tests/version-route.test.ts` → expects `{ url, server }`
   return await new Promise((resolve, reject) => {
-    const server = app.listen(port, host, () => {
-      const address = server.address();
-      // `address()` can in theory return `string | AddressInfo | null`. For
-      // a TCP listener it's always `AddressInfo` with a `.port` — the guard
-      // is belt-and-braces so an unexpected null never silently produces a
-      // `http://127.0.0.1:0` URL that callers would then try to fetch.
-      const boundPort =
-        address && typeof address === 'object' ? address.port : null;
-      if (!boundPort) {
-        reject(
-          new Error(
-            `[od] daemon failed to resolve listening port (address=${JSON.stringify(address)})`,
-          ),
-        );
-        return;
-      }
-      resolvedPort = boundPort;
-      // When binding to all interfaces report localhost for local callers;
-      // when binding to a specific address (e.g. a Tailscale IP) report that
-      // address so remote callers and the sidecar use the correct URL.
-      const reportHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
-      const url = `http://${reportHost}:${resolvedPort}`;
-      if (!returnServer) {
-        console.log(`[od] daemon listening on ${url}`);
-      }
-      daemonUrl = url;
-      resolve(returnServer ? { url, server } : url);
-    });
+    const cleanupDaemonBackgroundWork = () => {
+      composioConnectorProvider.stopCatalogRefreshLoop();
+      orbitService.stop();
+    };
+    let server;
+    try {
+      server = app.listen(port, host, () => {
+        const address = server.address();
+        // `address()` can in theory return `string | AddressInfo | null`. For
+        // a TCP listener it's always `AddressInfo` with a `.port` — the guard
+        // is belt-and-braces so an unexpected null never silently produces a
+        // `http://127.0.0.1:0` URL that callers would then try to fetch.
+        const boundPort =
+          address && typeof address === 'object' ? address.port : null;
+        if (!boundPort) {
+          reject(
+            new Error(
+              `[od] daemon failed to resolve listening port (address=${JSON.stringify(address)})`,
+            ),
+          );
+          return;
+        }
+        resolvedPort = boundPort;
+        // When binding to all interfaces report localhost for local callers;
+        // when binding to a specific address (e.g. a Tailscale IP) report that
+        // address so remote callers and the sidecar use the correct URL.
+        const reportHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+        const url = `http://${reportHost}:${resolvedPort}`;
+        if (!returnServer) {
+          console.log(`[od] daemon listening on ${url}`);
+        }
+        daemonUrl = url;
+        resolve(returnServer ? { url, server } : url);
+      });
+    } catch (error) {
+      cleanupDaemonBackgroundWork();
+      reject(error);
+      return;
+    }
+    server.once('close', cleanupDaemonBackgroundWork);
     // `app.listen` throws synchronously when the port is already in use on
     // some Node versions, but emits an `error` event on others (and for
     // EACCES / EADDRNOTAVAIL even on the same Node). Wire the event so the
     // returned Promise always settles instead of hanging forever.
-    server.on('error', reject);
+    server.on('error', (error) => {
+      cleanupDaemonBackgroundWork();
+      reject(error);
+    });
   });
 }
 

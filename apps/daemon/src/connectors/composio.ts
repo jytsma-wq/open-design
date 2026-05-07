@@ -420,6 +420,7 @@ export class ComposioConnectorProvider {
   private persistedDefinitions: ConnectorCatalogDefinition[] | undefined;
   private persistedFetchedAt: string | undefined;
   private refreshTimer: NodeJS.Timeout | undefined;
+  private refreshTimeout: NodeJS.Timeout | undefined;
 
   constructor() {
     this.loadPersistedCatalogCache();
@@ -451,9 +452,14 @@ export class ComposioConnectorProvider {
   }
 
   stopCatalogRefreshLoop(): void {
-    if (!this.refreshTimer) return;
-    clearInterval(this.refreshTimer);
-    this.refreshTimer = undefined;
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = undefined;
+    }
+    if (this.refreshTimeout) {
+      clearTimeout(this.refreshTimeout);
+      this.refreshTimeout = undefined;
+    }
   }
 
   getFastDefinitions(): ConnectorCatalogDefinition[] {
@@ -534,9 +540,12 @@ export class ComposioConnectorProvider {
   }
 
   private scheduleCatalogRefresh(delayMs: number): void {
+    if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
     const timeout = setTimeout(() => {
+      if (this.refreshTimeout === timeout) this.refreshTimeout = undefined;
       void this.refreshCatalogInBackground();
     }, delayMs);
+    this.refreshTimeout = timeout;
     timeout.unref?.();
   }
 

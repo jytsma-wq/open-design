@@ -8,7 +8,14 @@ import {
   CUSTOM_MODEL_SENTINEL,
   renderModelOptions,
 } from './modelOptions';
-import { DEFAULT_NOTIFICATIONS, DEFAULT_ORBIT, KNOWN_PROVIDERS, syncConfigToDaemon } from '../state/config';
+import {
+  DEFAULT_NOTIFICATIONS,
+  DEFAULT_ORBIT,
+  KNOWN_PROVIDERS,
+  syncComposioConfigToDaemon,
+  syncConfigToDaemon,
+  syncMediaProvidersToDaemon,
+} from '../state/config';
 import type { KnownProvider } from '../state/config';
 import { navigate as navigateRoute } from '../router';
 import {
@@ -67,7 +74,7 @@ interface Props {
   appVersionInfo: AppVersionInfo | null;
   welcome?: boolean;
   initialSection?: SettingsSection;
-  onSave: (cfg: AppConfig, closeModal?: boolean) => Promise<{ success: boolean }> | void;
+  onSave: (cfg: AppConfig, closeModal?: boolean) => Promise<{ success: boolean; config?: AppConfig }> | void;
   onClose: () => void;
   onRefreshAgents: (
     options?: AgentRefreshOptions,
@@ -1716,7 +1723,12 @@ export function SettingsDialog({
             type="button"
             className="primary"
             disabled={!canSave}
-            onClick={() => onSave(cfg, activeSection !== 'composio')}
+            onClick={() => {
+              void (async () => {
+                const result = await onSave(cfg, activeSection !== 'composio');
+                if (result?.success && result.config) setCfg(result.config);
+              })();
+            }}
           >
             {welcome ? t('settings.getStarted') : t('common.save')}
           </button>
@@ -1875,6 +1887,11 @@ interface OrbitRunStartResponse {
 export async function persistConfigAndRunOrbit(
   config: AppConfig,
 ): Promise<OrbitRunStartResponse> {
+  if (config.composio !== undefined) {
+    const composioSaved = await syncComposioConfigToDaemon(config.composio);
+    if (!composioSaved) throw new Error('Composio config save failed');
+  }
+  await syncMediaProvidersToDaemon(config.mediaProviders, { force: true, throwOnError: true });
   await syncConfigToDaemon(config, { throwOnError: true });
   const response = await fetch('/api/orbit/run', { method: 'POST' });
   if (!response.ok) throw new Error('Orbit run failed');

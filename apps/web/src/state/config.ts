@@ -386,16 +386,18 @@ export function hasAnyConfiguredProvider(
 
 export async function syncMediaProvidersToDaemon(
   providers: Record<string, MediaProviderCredentials> | undefined,
-  options?: { force?: boolean },
+  options?: { force?: boolean; throwOnError?: boolean },
 ): Promise<void> {
   if (!providers) return;
   try {
-    await fetch('/api/media/config', {
+    const response = await fetch('/api/media/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ providers, force: Boolean(options?.force) }),
     });
+    if (!response.ok) throw new Error(`Failed to sync media config (${response.status})`);
   } catch {
+    if (options?.throwOnError) throw new Error('Media config save failed');
     // Daemon offline; localStorage keeps the user's copy for the next save.
   }
 }

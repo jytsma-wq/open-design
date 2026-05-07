@@ -266,7 +266,7 @@ export function App() {
     void syncConfigToDaemon(withOnboarding);
     setConfig(withOnboarding);
     if (closeModal) setSettingsOpen(false);
-    return { success: true };
+    return { success: true, config: withOnboarding };
   }, [config]);
 
   const handleModeChange = useCallback(
