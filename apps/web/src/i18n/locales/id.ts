@@ -199,7 +199,6 @@ export const id: Dict = {
   'connectors.gateTitle': 'Konfigurasikan API key Composio',
   'connectors.gateBody':
     'Konektor membutuhkan API key Composio. Tambahkan di Pengaturan untuk membuka integrasi yang tersedia.',
-  'connectors.gateAction': 'Buka pengaturan',
   'connectors.aboutLabel': 'Tentang',
   'connectors.detailsLabel': 'Detail',
   'connectors.statusLabel': 'Status',
