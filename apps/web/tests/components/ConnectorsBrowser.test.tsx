@@ -109,4 +109,31 @@ describe('ConnectorsBrowser', () => {
       expect(screen.queryByText('Loading tools…')).toBeNull();
     });
   });
+
+  it('prefers refreshed catalog statuses over stale cached connector state', async () => {
+    vi.mocked(fetchConnectors)
+      .mockResolvedValueOnce([configuredComposioConnector])
+      .mockResolvedValueOnce([
+        {
+          ...configuredComposioConnector,
+          status: 'available',
+          auth: { provider: 'composio', configured: false },
+        },
+      ]);
+    vi.mocked(fetchConnectorDiscovery).mockResolvedValue([]);
+    vi.mocked(fetchConnectorStatuses).mockResolvedValue({});
+
+    const { rerender } = render(
+      <ConnectorsBrowser composioConfigured catalogRefreshKey="initial" />,
+    );
+
+    await screen.findByRole('button', { name: 'Disconnect' });
+
+    rerender(<ConnectorsBrowser composioConfigured catalogRefreshKey="refetched" />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Connect' })).toBeTruthy();
+      expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull();
+    });
+  });
 });

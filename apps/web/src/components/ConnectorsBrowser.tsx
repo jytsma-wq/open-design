@@ -194,7 +194,15 @@ function ConnectorLogo({
 function mergeConnectors(current: ConnectorDetail[], incoming: ConnectorDetail[]): ConnectorDetail[] {
   if (current.length === 0) return incoming;
   const incomingById = new Map(incoming.map((connector) => [connector.id, connector]));
-  const merged = current.map((connector) => incomingById.get(connector.id) ?? connector);
+  const merged = current.map((connector) => {
+    const next = incomingById.get(connector.id);
+    if (!next) return connector;
+    return {
+      ...connector,
+      ...next,
+      tools: next.tools.length > 0 ? next.tools : connector.tools,
+    };
+  });
   const currentIds = new Set(current.map((connector) => connector.id));
   for (const connector of incoming) {
     if (!currentIds.has(connector.id)) merged.push(connector);
@@ -404,7 +412,7 @@ export function ConnectorsBrowser({
     (async () => {
       const next = await fetchConnectors();
       if (cancelled) return;
-      setConnectors((curr) => mergeConnectors(next, curr));
+      setConnectors((curr) => mergeConnectors(curr, next));
       setLoading(false);
     })();
     return () => {
