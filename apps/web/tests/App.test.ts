@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildPersistedConfig,
   persistComposioConfigChange,
+  resolveSettingsCloseConfig,
   shouldSyncMediaProvidersOnSave,
 } from '../src/App';
 import type { AppConfig } from '../src/types';
@@ -65,5 +66,27 @@ describe('buildPersistedConfig', () => {
         { ...baseConfig, onboardingCompleted: true },
       ),
     ).toMatchObject({ onboardingCompleted: true });
+  });
+});
+
+describe('resolveSettingsCloseConfig', () => {
+  it('marks onboarding complete without discarding the latest persisted draft', () => {
+    expect(
+      resolveSettingsCloseConfig(
+        {
+          ...baseConfig,
+          onboardingCompleted: false,
+          orbit: { enabled: false, time: '09:00', templateSkillId: 'stale-template' },
+        },
+        {
+          ...baseConfig,
+          onboardingCompleted: false,
+          orbit: { enabled: true, time: '11:30', templateSkillId: 'fresh-template' },
+        },
+      ),
+    ).toMatchObject({
+      onboardingCompleted: true,
+      orbit: { enabled: true, time: '11:30', templateSkillId: 'fresh-template' },
+    });
   });
 });

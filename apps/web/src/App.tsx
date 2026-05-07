@@ -98,10 +98,20 @@ export function buildPersistedConfig(next: AppConfig, current: AppConfig): AppCo
   };
 }
 
+export function resolveSettingsCloseConfig(
+  rendered: AppConfig,
+  latestPersisted: AppConfig,
+): AppConfig {
+  const base = latestPersisted === rendered ? rendered : latestPersisted;
+  return base.onboardingCompleted ? base : { ...base, onboardingCompleted: true };
+}
+
 export function App() {
   const [config, setConfig] = useState<AppConfig>(() => loadConfig());
   const configRef = useRef(config);
   configRef.current = config;
+  const latestPersistedConfigRef = useRef(config);
+  latestPersistedConfigRef.current = config;
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsWelcome, setSettingsWelcome] = useState(false);
   const [settingsInitialSection, setSettingsInitialSection] = useState<SettingsSection>('execution');
@@ -313,6 +323,7 @@ export function App() {
     // closing, preserve any onboarding completion that the close gesture
     // already committed so an unmount autosave cannot re-open the welcome flow.
     const persisted = buildPersistedConfig(next, configRef.current);
+    latestPersistedConfigRef.current = persisted;
     saveConfig(persisted);
     setConfig(persisted);
     await Promise.all([
@@ -682,8 +693,9 @@ export function App() {
             // onboardingCompleted on close so the welcome modal stops
             // re-prompting on every refresh, regardless of whether
             // the user changed anything during the session.
-            if (!config.onboardingCompleted) {
-              const next: AppConfig = { ...config, onboardingCompleted: true };
+            const next = resolveSettingsCloseConfig(config, latestPersistedConfigRef.current);
+            if (!next.onboardingCompleted || !config.onboardingCompleted) {
+              latestPersistedConfigRef.current = next;
               saveConfig(next);
               void syncConfigToDaemon(next);
               setConfig(next);
