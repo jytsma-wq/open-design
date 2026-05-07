@@ -3,6 +3,7 @@ import {
   agentRefreshOptionsForConfig,
   canRunProviderConnectionTest,
   deriveComposioCredentialState,
+  configForManualOrbitRun,
   isValidApiBaseUrl,
   shouldShowCustomModelInput,
   persistConfigAndRunOrbit,
@@ -424,6 +425,48 @@ describe('SettingsDialog Orbit run behavior', () => {
         enabled: true,
         time: '09:30',
         templateSkillId: 'orbit-template-1',
+      },
+    });
+    expect(calls[1]).toMatchObject({
+      url: '/api/orbit/run',
+      method: 'POST',
+    });
+  });
+
+  it('persists the displayed default template before starting a legacy null-template run', async () => {
+    const calls: Array<{ url: string; method: string; body?: string }> = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method ?? 'GET';
+      const body = typeof init?.body === 'string' ? init.body : undefined;
+      calls.push({ url, method, body });
+
+      if (url === '/api/app-config') {
+        return new Response(null, { status: 204 });
+      }
+      if (url === '/api/orbit/run') {
+        return new Response(JSON.stringify({ projectId: 'orbit-project', agentRunId: 'run-2' }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }) as typeof fetch;
+
+    await expect(
+      persistConfigAndRunOrbit(configForManualOrbitRun({
+        ...baseConfig,
+        orbit: {
+          enabled: true,
+          time: '09:30',
+          templateSkillId: null,
+        },
+      })),
+    ).resolves.toEqual({ projectId: 'orbit-project', agentRunId: 'run-2' });
+
+    expect(calls).toHaveLength(2);
+    expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({
+      orbit: {
+        enabled: true,
+        time: '09:30',
+        templateSkillId: 'orbit-general',
       },
     });
     expect(calls[1]).toMatchObject({
