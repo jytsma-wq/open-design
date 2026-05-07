@@ -473,10 +473,10 @@ describe('SettingsDialog Orbit run behavior', () => {
       '/api/app-config',
       '/api/orbit/run',
     ]);
-    expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({ force: true });
+    expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({ force: false });
   });
 
-  it('syncs an explicit empty media provider map before starting a manual Orbit run', async () => {
+  it('does not force an explicit empty media provider map before starting a manual Orbit run', async () => {
     const calls: Array<{ url: string; method: string; body?: string }> = [];
     globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -511,7 +511,7 @@ describe('SettingsDialog Orbit run behavior', () => {
     expect(calls.map((call) => call.url)).toEqual(['/api/media/config', '/api/app-config', '/api/orbit/run']);
     expect(JSON.parse(calls[0]!.body ?? '{}')).toMatchObject({
       providers: {},
-      force: true,
+      force: false,
     });
   });
 

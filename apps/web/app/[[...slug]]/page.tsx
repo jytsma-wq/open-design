@@ -1,10 +1,5 @@
 import { ClientApp } from './client-app';
 
-// Static export builds cannot opt into runtime-generated params. The daemon's
-// SPA fallback serves the exported shell for unknown deep links instead, so the
-// route stays static-export compatible while still emitting the root shell.
-export const dynamicParams = false;
-
 // The whole product is a client-driven SPA: project IDs and file paths are
 // unbounded user input, so we route every URL through this single optional
 // catch-all and let the existing client router (src/router.ts, which reads
