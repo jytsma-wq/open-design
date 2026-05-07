@@ -49,7 +49,7 @@ function mockComposioFetch(options = {}) {
     }
     const parsed = new URL(url);
     if (parsed.hostname === 'logos.composio.dev') {
-      if (logoFetch) return await logoFetch(parsed, init);
+      if (logoFetch) return await logoFetch(parsed, init, input);
       return new Response('<svg xmlns="http://www.w3.org/2000/svg"></svg>', {
         status: 200,
         headers: { 'content-type': 'image/svg+xml' },
@@ -540,9 +540,9 @@ describe('connector routes', () => {
             init.signal.addEventListener('abort', abort, { once: true });
           });
         }
-        return new Response('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>', {
+        return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), {
           status: 200,
-          headers: { 'content-type': 'image/svg+xml' },
+          headers: { 'content-type': 'image/png' },
         });
       },
     });
@@ -556,9 +556,59 @@ describe('connector routes', () => {
     const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/github?theme=dark`);
 
     expect(secondResponse.status).toBe(200);
-    expect(await secondResponse.text()).toContain('<rect');
+    expect(secondResponse.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await secondResponse.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(upstreamRequests).toBe(2);
   }, 15_000);
+
+  it('serves raster Composio logo responses', async () => {
+    mockComposioFetch({
+      logoFetch: async () => {
+        return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    const response = await fetch(`${baseUrl}/api/connectors/logos/github?theme=dark`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  });
+
+  it('rejects SVG Composio logo responses without caching them', async () => {
+    let upstreamRequests = 0;
+    const slug = 'svg_only_logo';
+    mockComposioFetch({
+      logoFetch: async () => {
+        upstreamRequests += 1;
+        if (upstreamRequests === 1) {
+          return new Response('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>', {
+            status: 200,
+            headers: { 'content-type': 'image/svg+xml' },
+          });
+        }
+        return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    const firstResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(firstResponse.status).toBe(404);
+    expect(firstResponse.headers.get('cache-control')).toBe('no-store');
+
+    const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await secondResponse.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(upstreamRequests).toBe(2);
+  });
 
   it('rejects non-image Composio logo responses without caching them', async () => {
     let upstreamRequests = 0;
@@ -572,9 +622,9 @@ describe('connector routes', () => {
             headers: { 'content-type': 'text/html; charset=utf-8' },
           });
         }
-        return new Response('<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>', {
+        return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), {
           status: 200,
-          headers: { 'content-type': 'image/svg+xml' },
+          headers: { 'content-type': 'image/png' },
         });
       },
     });
@@ -582,12 +632,13 @@ describe('connector routes', () => {
     const firstResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
 
     expect(firstResponse.status).toBe(404);
+    expect(firstResponse.headers.get('cache-control')).toBe('no-store');
 
     const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
 
     expect(secondResponse.status).toBe(200);
-    expect(secondResponse.headers.get('content-type')).toContain('image/svg+xml');
-    expect(await secondResponse.text()).toContain('<rect');
+    expect(secondResponse.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await secondResponse.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(upstreamRequests).toBe(2);
   });
 

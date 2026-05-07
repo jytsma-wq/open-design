@@ -96,10 +96,17 @@ function sendComposioLogo(res: Response, logo: CachedComposioLogo): void {
   res.send(logo.body);
 }
 
+function sendMissingComposioLogo(res: Response): void {
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.status(404).end();
+}
+
 function normalizeImageContentType(value: string | null): string | null {
   const contentType = value?.split(';')[0]?.trim().toLowerCase();
   if (!contentType?.startsWith('image/')) return null;
-  return contentType === 'image/svg+xml' ? 'image/svg+xml; charset=utf-8' : contentType;
+  if (contentType === 'image/svg+xml') return null;
+  return contentType;
 }
 
 function isAbortLikeError(error: unknown): boolean {
@@ -121,7 +128,7 @@ async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise
     const timer = setTimeout(() => controller.abort(), COMPOSIO_LOGO_FETCH_TIMEOUT_MS);
     try {
       response = await fetch(upstream, {
-        headers: { accept: 'image/svg+xml,image/*;q=0.8,*/*;q=0.5' },
+        headers: { accept: 'image/avif,image/webp,image/apng,image/png,image/jpeg' },
         signal: controller.signal,
       });
     } catch (error) {
@@ -157,7 +164,7 @@ async function proxyComposioLogo(req: Request, res: Response): Promise<void> {
   const theme = parseConnectorLogoTheme(req.query.theme);
   const logo = await fetchComposioLogo(slug, theme);
   if (!logo) {
-    res.status(404).end();
+    sendMissingComposioLogo(res);
     return;
   }
   sendComposioLogo(res, logo);
