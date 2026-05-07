@@ -121,4 +121,10 @@ describe('i18n locales', () => {
 
     expect(requiredExplicitKeys.filter((key) => !explicitKeys.has(key))).toEqual([]);
   });
+
+  it('avoids brittle per-key English lookups in the Indonesian locale source', () => {
+    const source = readFileSync(new URL('../../src/i18n/locales/id.ts', import.meta.url), 'utf8');
+
+    expect(source).not.toMatch(/en\['(?:connectors\.category\.|liveArtifact\.viewer\.)/);
+  });
 });
