@@ -4591,6 +4591,11 @@ button.connector-action.is-loading {
   justify-content: center;
   width: 24px;
   height: 24px;
+  /* Reset the min-width from the non-embedded `.is-connect` / `.is-disconnect`
+     pill rules above; in the compact catalog the action collapses to a 24px
+     square and any `min-width` would force it back into a wide pill that
+     overlaps the card head text. */
+  min-width: 0;
   padding: 0;
   border-radius: 7px;
   border: 1px solid var(--border);
