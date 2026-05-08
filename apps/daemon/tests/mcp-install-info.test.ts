@@ -4,9 +4,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import express from 'express';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SIDECAR_DEFAULTS, SIDECAR_ENV } from '@open-design/sidecar-proto';
-import { isLocalSameOrigin } from '../src/server.js';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { isLocalSameOrigin } from '../src/origin-validation.js';
 import { buildMcpInstallPayload } from '../src/mcp-install-info.js';
 
 // The install-info endpoint is a self-contained handler that resolves
@@ -152,6 +152,11 @@ describe('GET /api/mcp/install-info', () => {
       }),
   );
 
+  afterEach(() => {
+    delete process.env.OD_ALLOWED_ORIGINS;
+    delete process.env.OD_BIND_HOST;
+  });
+
   it('non-sidecar launch bakes --daemon-url so custom ports keep working', async () => {
     const { port } = nonSidecar;
     const res = await fetch(`http://127.0.0.1:${port}/api/mcp/install-info`);
@@ -198,6 +203,18 @@ describe('GET /api/mcp/install-info', () => {
     const { port } = nonSidecar;
     const res = await fetch(`http://127.0.0.1:${port}/api/mcp/install-info`, {
       headers: { Origin: `http://127.0.0.1:${port}` },
+    });
+    expect(res.status).toBe(200);
+  });
+
+  it('accepts explicitly configured deployment origins', async () => {
+    const { port } = nonSidecar;
+    process.env.OD_ALLOWED_ORIGINS = `https://od.example.com,http://203.0.113.10:${port}`;
+    const res = await fetch(`http://127.0.0.1:${port}/api/mcp/install-info`, {
+      headers: {
+        Host: 'od.example.com',
+        Origin: 'https://od.example.com',
+      },
     });
     expect(res.status).toBe(200);
   });
