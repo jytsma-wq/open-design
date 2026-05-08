@@ -24,6 +24,7 @@ type ConnectorApiErrorCode =
 
 const COMPOSIO_LOGO_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const COMPOSIO_LOGO_FETCH_TIMEOUT_MS = 2_000;
+export const COMPOSIO_LOGO_CACHE_MAX_ENTRIES = 128;
 const COMPOSIO_LOGO_SLUG_ALIASES: Record<string, string> = {
   zohobooks: 'zoho_books',
 };
@@ -113,10 +114,38 @@ function isAbortLikeError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
 }
 
+function pruneExpiredComposioLogos(nowMs: number): void {
+  for (const [cacheKey, logo] of composioLogoCache) {
+    if (logo.expiresAtMs > nowMs) continue;
+    composioLogoCache.delete(cacheKey);
+  }
+}
+
+function promoteComposioLogoCacheEntry(cacheKey: string, logo: CachedComposioLogo): void {
+  composioLogoCache.delete(cacheKey);
+  composioLogoCache.set(cacheKey, logo);
+}
+
+function cacheComposioLogo(cacheKey: string, logo: CachedComposioLogo): void {
+  pruneExpiredComposioLogos(Date.now());
+  if (composioLogoCache.has(cacheKey)) composioLogoCache.delete(cacheKey);
+  while (composioLogoCache.size >= COMPOSIO_LOGO_CACHE_MAX_ENTRIES) {
+    const oldestCacheKey = composioLogoCache.keys().next().value;
+    if (oldestCacheKey === undefined) break;
+    composioLogoCache.delete(oldestCacheKey);
+  }
+  composioLogoCache.set(cacheKey, logo);
+}
+
 async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise<CachedComposioLogo | null> {
   const cacheKey = `${slug}:${theme}`;
+  const nowMs = Date.now();
   const cached = composioLogoCache.get(cacheKey);
-  if (cached && cached.expiresAtMs > Date.now()) return cached;
+  if (cached && cached.expiresAtMs > nowMs) {
+    promoteComposioLogoCacheEntry(cacheKey, cached);
+    return cached;
+  }
+  if (cached) composioLogoCache.delete(cacheKey);
 
   const inflight = composioLogoInflight.get(cacheKey);
   if (inflight) return inflight;
@@ -139,7 +168,7 @@ async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise
         contentType,
         expiresAtMs: Date.now() + COMPOSIO_LOGO_CACHE_TTL_MS,
       };
-      composioLogoCache.set(cacheKey, logo);
+      cacheComposioLogo(cacheKey, logo);
       return logo;
     } catch (error) {
       if (isAbortLikeError(error)) return null;

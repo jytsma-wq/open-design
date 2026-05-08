@@ -3,6 +3,7 @@ import { request as httpRequest } from 'node:http';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { COMPOSIO_LOGO_CACHE_MAX_ENTRIES } from '../src/connectors/routes.js';
 import { startServer } from '../src/server.js';
 import { ComposioConnectorProvider, composioConnectorProvider, getStaticComposioCatalogDefinitions } from '../src/connectors/composio.js';
 import { readComposioConfig, writeComposioConfig } from '../src/connectors/composio-config.js';
@@ -603,6 +604,42 @@ describe('connector routes', () => {
     expect(Buffer.from(await secondResponse.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
     expect(upstreamRequests).toBe(2);
   }, 15_000);
+
+  it('evicts the least recently used Composio logo cache entry when the cache is full', async () => {
+    let upstreamRequests = 0;
+    mockComposioFetch({
+      logoFetch: async (parsed) => {
+        upstreamRequests += 1;
+        return new Response(Buffer.from(parsed.pathname), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    for (let index = 0; index < COMPOSIO_LOGO_CACHE_MAX_ENTRIES; index += 1) {
+      const response = await fetch(`${baseUrl}/api/connectors/logos/slug_${index}?theme=dark`);
+      expect(response.status).toBe(200);
+    }
+
+    const warmedCount = upstreamRequests;
+
+    const refreshedResponse = await fetch(`${baseUrl}/api/connectors/logos/slug_0?theme=dark`);
+    expect(refreshedResponse.status).toBe(200);
+    expect(upstreamRequests).toBe(warmedCount);
+
+    const overflowResponse = await fetch(`${baseUrl}/api/connectors/logos/slug_overflow?theme=dark`);
+    expect(overflowResponse.status).toBe(200);
+    expect(upstreamRequests).toBe(warmedCount + 1);
+
+    const stillCachedResponse = await fetch(`${baseUrl}/api/connectors/logos/slug_0?theme=dark`);
+    expect(stillCachedResponse.status).toBe(200);
+    expect(upstreamRequests).toBe(warmedCount + 1);
+
+    const evictedResponse = await fetch(`${baseUrl}/api/connectors/logos/slug_1?theme=dark`);
+    expect(evictedResponse.status).toBe(200);
+    expect(upstreamRequests).toBe(warmedCount + 2);
+  });
 
   it('serves raster Composio logo responses', async () => {
     mockComposioFetch({
