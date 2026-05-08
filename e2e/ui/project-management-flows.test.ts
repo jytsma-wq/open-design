@@ -52,6 +52,21 @@ test.beforeEach(async ({ page }) => {
     );
   }, STORAGE_KEY);
 
+  await page.route('**/api/app-config', async (route) => {
+    await route.fulfill({
+      json: {
+        config: {
+          onboardingCompleted: true,
+          agentId: 'mock',
+          skillId: null,
+          designSystemId: null,
+          agentModels: {},
+          agentCliEnv: {},
+        },
+      },
+    });
+  });
+
   await page.route('**/api/agents', async (route) => {
     await route.fulfill({
       json: {
@@ -125,10 +140,12 @@ test('design system multi-select stores primary and inspiration metadata', async
   await page.goto('/');
   await page.getByTestId('new-project-tab-prototype').click();
   await page.getByTestId('new-project-name').fill('Design system multi select metadata');
+  await expect(page.getByTestId('design-system-trigger')).toContainText('Nexu Soft Tech');
 
   await page.getByTestId('design-system-trigger').click();
-  await page.getByRole('tab', { name: /multi/i }).click();
-  await page.getByRole('option', { name: /Nexu Soft Tech/i }).click();
+  const multiTab = page.getByRole('tab', { name: /multi/i });
+  await multiTab.click();
+  await expect(multiTab).toHaveAttribute('aria-selected', 'true');
   await page.getByRole('option', { name: /Editorial Noir/i }).click();
   await page.getByRole('option', { name: /Data Mist/i }).click();
 
