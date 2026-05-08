@@ -25,6 +25,7 @@ type ConnectorApiErrorCode =
 const COMPOSIO_LOGO_CACHE_TTL_MS = 1000 * 60 * 60 * 24;
 const COMPOSIO_LOGO_FETCH_TIMEOUT_MS = 2_000;
 export const COMPOSIO_LOGO_CACHE_MAX_ENTRIES = 128;
+const COMPOSIO_LOGO_MAX_BYTES = 1024 * 1024;
 const COMPOSIO_LOGO_SLUG_ALIASES: Record<string, string> = {
   zohobooks: 'zoho_books',
 };
@@ -114,6 +115,36 @@ function isAbortLikeError(error: unknown): boolean {
   return error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
 }
 
+function parsePositiveIntegerHeader(value: string | null): number | null {
+  if (!value) return null;
+  if (!/^\d+$/.test(value)) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
+async function readComposioLogoBody(response: globalThis.Response): Promise<Buffer | null> {
+  const contentLength = parsePositiveIntegerHeader(response.headers.get('content-length'));
+  if (contentLength !== null && contentLength > COMPOSIO_LOGO_MAX_BYTES) return null;
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const body = Buffer.from(await response.arrayBuffer());
+    return body.byteLength <= COMPOSIO_LOGO_MAX_BYTES ? body : null;
+  }
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    totalBytes += value.byteLength;
+    if (totalBytes > COMPOSIO_LOGO_MAX_BYTES) return null;
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), totalBytes);
+}
+
 function pruneExpiredComposioLogos(nowMs: number): void {
   for (const [cacheKey, logo] of composioLogoCache) {
     if (logo.expiresAtMs > nowMs) continue;
@@ -160,7 +191,8 @@ async function fetchComposioLogo(slug: string, theme: 'light' | 'dark'): Promise
         signal: controller.signal,
       });
       if (!response.ok) return null;
-      const body = Buffer.from(await response.arrayBuffer());
+      const body = await readComposioLogoBody(response);
+      if (!body) return null;
       const contentType = normalizeImageContentType(response.headers.get('content-type'));
       if (!contentType) return null;
       const logo: CachedComposioLogo = {

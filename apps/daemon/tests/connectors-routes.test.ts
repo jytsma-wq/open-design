@@ -605,6 +605,47 @@ describe('connector routes', () => {
     expect(upstreamRequests).toBe(2);
   }, 15_000);
 
+  it('rejects oversized Composio logo payloads before buffering them', async () => {
+    let upstreamRequests = 0;
+    let arrayBufferCalled = false;
+    const slug = 'oversized_logo';
+    mockComposioFetch({
+      logoFetch: async () => {
+        upstreamRequests += 1;
+        if (upstreamRequests === 1) {
+          return {
+            ok: true,
+            headers: new Headers({
+              'content-type': 'image/png',
+              'content-length': '1048577',
+            }),
+            arrayBuffer: async () => {
+              arrayBufferCalled = true;
+              return Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+            },
+          };
+        }
+        return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      },
+    });
+
+    const firstResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(firstResponse.status).toBe(404);
+    expect(firstResponse.headers.get('cache-control')).toBe('no-store');
+    expect(arrayBufferCalled).toBe(false);
+
+    const secondResponse = await fetch(`${baseUrl}/api/connectors/logos/${slug}?theme=dark`);
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.headers.get('content-type')).toBe('image/png');
+    expect(Buffer.from(await secondResponse.arrayBuffer())).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    expect(upstreamRequests).toBe(2);
+  });
+
   it('evicts the least recently used Composio logo cache entry when the cache is full', async () => {
     let upstreamRequests = 0;
     mockComposioFetch({
