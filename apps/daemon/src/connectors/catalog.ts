@@ -164,13 +164,7 @@ function toolDefinitionToDetail(tool: ConnectorCatalogToolDefinition): Connector
   };
 }
 
-function isVisibleConnectorTool(tool: Pick<ConnectorCatalogToolDefinition, 'safety'>): boolean {
-  return tool.safety.sideEffect === 'read';
-}
-
 export function connectorDefinitionToDetail(definition: ConnectorCatalogDefinition): ConnectorDetail {
-  const visibleTools = definition.tools.filter((tool) => isVisibleConnectorTool(tool));
-  const visibleToolNames = new Set(visibleTools.map((tool) => tool.name));
   return {
     id: definition.id,
     name: definition.name,
@@ -178,10 +172,10 @@ export function connectorDefinitionToDetail(definition: ConnectorCatalogDefiniti
     category: definition.category,
     ...(definition.description === undefined ? {} : { description: definition.description }),
     status: definition.disabled ? 'disabled' : 'available',
-    tools: visibleTools.map((tool) => toolDefinitionToDetail(tool)),
+    tools: definition.tools.map((tool) => toolDefinitionToDetail(tool)),
     ...(definition.featuredToolNames === undefined
       ? {}
-      : { featuredToolNames: definition.featuredToolNames.filter((toolName) => visibleToolNames.has(toolName)) }),
+      : { featuredToolNames: [...definition.featuredToolNames] }),
     ...(definition.minimumApproval === undefined ? {} : { minimumApproval: definition.minimumApproval }),
     auth: {
       provider: definition.authentication ?? (definition.provider === 'open-design' ? 'local' : 'oauth'),

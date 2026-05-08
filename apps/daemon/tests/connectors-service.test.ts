@@ -219,8 +219,8 @@ describe('connector read-only safety classification', () => {
   });
 });
 
-describe('connector visible tool filtering', () => {
-  it('filters non-read tools from connector list/detail discovery responses', async () => {
+describe('connector detail responses', () => {
+  it('keeps non-read tools in connector list/detail discovery responses', async () => {
     const definition = externalConnector({
       tools: [
         {
@@ -261,8 +261,13 @@ describe('connector visible tool filtering', () => {
     await expect(service.listConnectors()).resolves.toEqual([
       expect.objectContaining({
         id: 'external_docs',
-        tools: [expect.objectContaining({ name: 'docs.search' })],
-        featuredToolNames: ['docs.search'],
+        tools: [
+          expect.objectContaining({ name: 'docs.search' }),
+          expect.objectContaining({ name: 'docs.update_page' }),
+          expect.objectContaining({ name: 'docs.delete_page' }),
+          expect.objectContaining({ name: 'docs.sync' }),
+        ],
+        featuredToolNames: ['docs.search', 'docs.update_page', 'docs.delete_page', 'docs.sync'],
       }),
     ]);
 
@@ -271,8 +276,13 @@ describe('connector visible tool filtering', () => {
         connectors: [
           expect.objectContaining({
             id: 'external_docs',
-            tools: [expect.objectContaining({ name: 'docs.search' })],
-            featuredToolNames: ['docs.search'],
+            tools: [
+              expect.objectContaining({ name: 'docs.search' }),
+              expect.objectContaining({ name: 'docs.update_page' }),
+              expect.objectContaining({ name: 'docs.delete_page' }),
+              expect.objectContaining({ name: 'docs.sync' }),
+            ],
+            featuredToolNames: ['docs.search', 'docs.update_page', 'docs.delete_page', 'docs.sync'],
           }),
         ],
       }),
@@ -281,8 +291,13 @@ describe('connector visible tool filtering', () => {
     await expect(service.getConnector('external_docs')).resolves.toEqual(
       expect.objectContaining({
         id: 'external_docs',
-        tools: [expect.objectContaining({ name: 'docs.search' })],
-        featuredToolNames: ['docs.search'],
+        tools: [
+          expect.objectContaining({ name: 'docs.search' }),
+          expect.objectContaining({ name: 'docs.update_page' }),
+          expect.objectContaining({ name: 'docs.delete_page' }),
+          expect.objectContaining({ name: 'docs.sync' }),
+        ],
+        featuredToolNames: ['docs.search', 'docs.update_page', 'docs.delete_page', 'docs.sync'],
       }),
     );
   });

@@ -364,6 +364,7 @@ describe('connector routes', () => {
     expect(connect.body.connector).toMatchObject({ id: 'slack', status: 'connected', auth: { configured: true } });
     expect(connect.body.connector.tools).toEqual([
       expect.objectContaining({ name: 'slack.slack_list_channels' }),
+      expect.objectContaining({ name: 'slack.slack_send_message' }),
     ]);
     expect(lastComposioAuthConfigRequest).toEqual({
       toolkit: { slug: 'SLACK' },
