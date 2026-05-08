@@ -1755,7 +1755,6 @@ code {
   background: var(--red-bg);
   color: var(--red);
 }
-<<<<<<< HEAD
 .settings-test-status.warn {
   border-color: var(--amber-border, var(--orange-border, var(--green-border)));
   background: var(--amber-bg, var(--orange-bg, var(--green-bg)));
