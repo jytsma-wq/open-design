@@ -42,22 +42,19 @@ export const DEFAULT_PET: PetConfig = {
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
-  mode: 'daemon',
-  apiKey: '',
-  baseUrl: 'https://api.anthropic.com',
-  model: 'claude-sonnet-4-5',
-  // New configs should be explicit. loadConfig() still detects parsed legacy
-  // saved configs that did not have this field and migrates those from their
-  // saved baseUrl/model before applying the current migration version.
-  apiProtocol: 'anthropic',
+  mode: 'api',
+  apiKey: process.env.OPENAI_API_KEY ?? '',
+  baseUrl: 'https://api.openai.com/v1',
+  model: 'gpt-5.2',
+  apiProtocol: 'openai',
   apiVersion: '',
   apiProtocolConfigs: {},
   configMigrationVersion: CONFIG_MIGRATION_VERSION,
-  apiProviderBaseUrl: 'https://api.anthropic.com',
+  apiProviderBaseUrl: 'https://api.openai.com/v1',
   agentId: null,
   skillId: null,
   designSystemId: null,
-  onboardingCompleted: false,
+  onboardingCompleted: true,
   theme: 'system',
   mediaProviders: {},
   composio: {},
@@ -124,12 +121,12 @@ export const KNOWN_PROVIDERS: KnownProvider[] = [
     ],
   },
   {
-    label: 'OpenAI',
-    protocol: 'openai',
-    baseUrl: 'https://api.openai.com/v1',
-    model: 'gpt-4o',
-    models: ['gpt-4o', 'gpt-4o-mini', 'o3', 'o4-mini'],
-  },
+  label: 'OpenAI',
+  protocol: 'openai',
+  baseUrl: 'https://api.openai.com/v1',
+  model: 'gpt-5.2',
+  models: ['gpt-5.2', 'gpt-5.2-mini', 'gpt-5.2-codex'],
+},
   {
     label: 'Azure OpenAI',
     protocol: 'azure',

@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
+import Script from 'next/script';
 import { I18nProvider } from '../src/i18n';
 import '../src/index.css';
 
@@ -31,10 +32,12 @@ const themeInitScript = `(function(){try{var c=JSON.parse(localStorage.getItem('
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang='en' suppressHydrationWarning>
-      {/* eslint-disable-next-line @next/next/no-sync-scripts */}
       <head>
-        {/* biome-ignore lint/security/noDangerouslySetInnerHtml: intentional theme-init inline script to prevent FOUC */}
-        <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <Script
+          id="theme-init"
+          strategy="beforeInteractive"
+          dangerouslySetInnerHTML={{ __html: themeInitScript }}
+        />
       </head>
       <body suppressHydrationWarning>
         <I18nProvider>{children}</I18nProvider>
