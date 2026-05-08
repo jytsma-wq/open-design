@@ -54,3 +54,4 @@ specs/change/active
 
 # Local design assistant context
 .impeccable.md
+.env
