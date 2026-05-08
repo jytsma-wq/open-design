@@ -1,6 +1,6 @@
 import path from 'node:path';
 import os from 'node:os';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -171,6 +171,22 @@ describe('OrbitService', () => {
         config: { time: '08:00' },
       });
       service.stop();
+    } finally {
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a malformed activity summary file as missing state', async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), 'orbit-test-'));
+    try {
+      await mkdir(path.join(dataDir, 'orbit'), { recursive: true });
+      await writeFile(path.join(dataDir, 'orbit', 'activity-summary.json'), '{not json', 'utf8');
+
+      const service = new OrbitService(dataDir);
+
+      await expect(service.status()).resolves.toMatchObject({
+        lastRun: null,
+      });
     } finally {
       await rm(dataDir, { recursive: true, force: true });
     }

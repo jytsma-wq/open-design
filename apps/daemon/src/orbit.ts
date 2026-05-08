@@ -140,13 +140,19 @@ function summaryFile(dataDir: string): string {
 }
 
 async function readLastSummary(dataDir: string): Promise<OrbitActivitySummary | null> {
+  let raw: string;
   try {
-    const raw = await readFile(summaryFile(dataDir), 'utf8');
-    const parsed = JSON.parse(raw) as OrbitActivitySummary;
-    return parsed && typeof parsed === 'object' ? parsed : null;
+    raw = await readFile(summaryFile(dataDir), 'utf8');
   } catch (error) {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return null;
     throw error;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as OrbitActivitySummary;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
   }
 }
 
