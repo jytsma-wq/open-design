@@ -849,6 +849,7 @@ export function SettingsDialog({
   const autosaveTimerRef = useRef<number | null>(null);
   const autosaveSavedTimerRef = useRef<number | null>(null);
   const autosaveRetryTimerRef = useRef<number | null>(null);
+  const autosavePendingFlushRef = useRef(false);
   const autosaveLatestRef = useRef<AppConfig>(cfg);
   const mediaProvidersChangeVersionRef = useRef(0);
   const lastSyncedMediaProvidersVersionRef = useRef(0);
@@ -871,7 +872,9 @@ export function SettingsDialog({
     if (autosaveTimerRef.current != null) {
       window.clearTimeout(autosaveTimerRef.current);
     }
+    autosavePendingFlushRef.current = true;
     autosaveTimerRef.current = window.setTimeout(() => {
+      autosavePendingFlushRef.current = false;
       autosaveTimerRef.current = null;
       const snapshot = autosaveLatestRef.current;
       const mediaProvidersVersion = mediaProvidersChangeVersionRef.current;
@@ -936,16 +939,15 @@ export function SettingsDialog({
   // timer to avoid setState after unmount.
   useEffect(() => {
     return () => {
-      if (autosaveTimerRef.current != null) {
-        window.clearTimeout(autosaveTimerRef.current);
-        autosaveTimerRef.current = null;
+      if (autosavePendingFlushRef.current) {
         const mediaProvidersVersion = mediaProvidersChangeVersionRef.current;
         // Best-effort flush; if it rejects, localStorage already has
         // the latest copy from the synchronous saveConfig call inside
         // onPersist.
-        void onPersist(autosaveLatestRef.current, {
+        autosavePendingFlushRef.current = false;
+        void Promise.resolve(onPersist(autosaveLatestRef.current, {
           forceMediaProviderSync: mediaProvidersVersion > lastSyncedMediaProvidersVersionRef.current,
-        });
+        })).catch(() => undefined);
       }
       if (autosaveSavedTimerRef.current != null) {
         window.clearTimeout(autosaveSavedTimerRef.current);

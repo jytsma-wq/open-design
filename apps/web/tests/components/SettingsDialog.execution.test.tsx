@@ -760,6 +760,45 @@ describe('SettingsDialog media providers interactions', () => {
     );
   });
 
+  it('catches unmount flush failures for pending media-provider autosaves', async () => {
+    const rejection = new Error('daemon unavailable');
+    const handleUnhandledRejection = vi.fn((event: PromiseRejectionEvent) => {
+      event.preventDefault();
+    });
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    try {
+      const { onPersist, unmount } = renderSettingsDialog(
+        { mode: 'daemon', agentId: 'codex' },
+        { initialSection: 'media' },
+      );
+      onPersist.mockRejectedValueOnce(rejection);
+
+      fireEvent.change(screen.getByLabelText('OpenAI API key'), {
+        target: { value: 'sk-unmount-media' },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByText('Saving…')).toBeTruthy();
+      });
+      unmount();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(onPersist).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mediaProviders: expect.objectContaining({
+            openai: expect.objectContaining({ apiKey: 'sk-unmount-media' }),
+          }),
+        }),
+        expect.objectContaining({ forceMediaProviderSync: true }),
+      );
+      expect(handleUnhandledRejection).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    }
+  });
+
   it('closes media settings via the close button or backdrop', () => {
     const first = renderSettingsDialog(
       { mode: 'daemon', agentId: 'codex' },
