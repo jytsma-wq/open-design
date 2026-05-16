@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '../../src/App';
 import type { AppConfig } from '../../src/types';
 import {
+  fetchDaemonConfig,
   fetchComposioConfigFromDaemon,
   loadConfig,
   mergeDaemonConfig,
@@ -23,7 +24,7 @@ import {
 } from '../../src/providers/registry';
 import { listProjects, listTemplates } from '../../src/state/projects';
 
-const useRouteMock = vi.fn(() => ({ kind: 'home' as const }));
+const useRouteMock = vi.fn(() => ({ kind: 'home' as const, view: 'home' as const }));
 
 vi.mock('../../src/router', () => ({
   navigate: vi.fn(),
@@ -31,10 +32,48 @@ vi.mock('../../src/router', () => ({
 }));
 
 vi.mock('../../src/components/EntryView', () => ({
-  EntryView: ({ onOpenSettings }: { onOpenSettings: (section?: 'composio') => void }) => (
-    <button type="button" onClick={() => onOpenSettings('composio')}>
-      Open connectors settings
-    </button>
+  EntryView: ({
+    config,
+    onOpenSettings,
+    onPersistComposioKey,
+  }: {
+    config: AppConfig;
+    onOpenSettings: (section?: 'composio') => void;
+    onPersistComposioKey: (composio: AppConfig['composio']) => void;
+  }) => (
+    <div>
+      <button type="button" onClick={() => onOpenSettings('composio')}>
+        Open connectors settings
+      </button>
+      <button type="button" onClick={() => onOpenSettings()}>
+        Open execution settings
+      </button>
+      <div>Composio tail: {config.composio?.apiKeyTail ?? 'none'}</div>
+      <button
+        type="button"
+        onClick={() =>
+          onPersistComposioKey({
+            apiKey: 'cmp_secret_replacement',
+            apiKeyConfigured: true,
+            apiKeyTail: config.composio?.apiKeyTail ?? '',
+          })
+        }
+      >
+        Save connectors key
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onPersistComposioKey({
+            apiKey: '',
+            apiKeyConfigured: false,
+            apiKeyTail: '',
+          })
+        }
+      >
+        Clear connectors key
+      </button>
+    </div>
   ),
 }));
 
@@ -54,11 +93,11 @@ vi.mock('../../src/components/SettingsDialog', () => ({
   SettingsDialog: ({
     initial,
     initialSection,
-    onSave,
+    onPersistComposioKey,
   }: {
     initial: AppConfig;
     initialSection?: string;
-    onSave: (next: AppConfig) => void;
+    onPersistComposioKey: (composio: AppConfig['composio']) => void;
   }) => (
     <div role="dialog" aria-label="Settings dialog">
       <div>Section: {initialSection}</div>
@@ -66,13 +105,10 @@ vi.mock('../../src/components/SettingsDialog', () => ({
       <button
         type="button"
         onClick={() =>
-          onSave({
-            ...initial,
-            composio: {
-              apiKey: 'cmp_secret_replacement',
-              apiKeyConfigured: true,
-              apiKeyTail: initial.composio?.apiKeyTail ?? '',
-            },
+          onPersistComposioKey({
+            apiKey: 'cmp_secret_replacement',
+            apiKeyConfigured: true,
+            apiKeyTail: initial.composio?.apiKeyTail ?? '',
           })
         }
       >
@@ -81,13 +117,10 @@ vi.mock('../../src/components/SettingsDialog', () => ({
       <button
         type="button"
         onClick={() =>
-          onSave({
-            ...initial,
-            composio: {
-              apiKey: '',
-              apiKeyConfigured: false,
-              apiKeyTail: '',
-            },
+          onPersistComposioKey({
+            apiKey: '',
+            apiKeyConfigured: false,
+            apiKeyTail: '',
           })
         }
       >
@@ -132,6 +165,7 @@ vi.mock('../../src/state/config', async () => {
     loadConfig: vi.fn(),
     mergeDaemonConfig: vi.fn(),
     saveConfig: vi.fn(),
+    fetchDaemonConfig: vi.fn().mockResolvedValue({}),
     syncConfigToDaemon: vi.fn().mockResolvedValue(undefined),
     syncComposioConfigToDaemon: vi.fn().mockResolvedValue(true),
     fetchComposioConfigFromDaemon: vi.fn().mockResolvedValue(null),
@@ -146,6 +180,7 @@ const mockedFetchPromptTemplates = vi.mocked(fetchPromptTemplates);
 const mockedFetchSkills = vi.mocked(fetchSkills);
 const mockedListProjects = vi.mocked(listProjects);
 const mockedListTemplates = vi.mocked(listTemplates);
+const mockedFetchDaemonConfig = vi.mocked(fetchDaemonConfig);
 const mockedFetchComposioConfigFromDaemon = vi.mocked(fetchComposioConfigFromDaemon);
 const mockedLoadConfig = vi.mocked(loadConfig);
 const mockedMergeDaemonConfig = vi.mocked(mergeDaemonConfig);
@@ -182,6 +217,7 @@ describe('App connectors settings flows', () => {
     mockedFetchAppVersionInfo.mockResolvedValue(null);
     mockedListProjects.mockResolvedValue([]);
     mockedListTemplates.mockResolvedValue([]);
+    mockedFetchDaemonConfig.mockResolvedValue({});
     mockedFetchComposioConfigFromDaemon.mockResolvedValue(null);
     mockedMergeDaemonConfig.mockImplementation((local) => local);
     mockedLoadConfig.mockReturnValue({ ...baseConfig });
@@ -208,11 +244,53 @@ describe('App connectors settings flows', () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open connectors settings' }));
 
     await waitFor(() => {
       expect(screen.getByText('Composio tail: uQEg')).toBeTruthy();
     });
+  });
+
+  it('does not show first-run privacy consent until daemon config hydration finishes', async () => {
+    let resolveDaemonConfig: (value: Record<string, never>) => void = () => {};
+    mockedFetchDaemonConfig.mockReturnValue(
+      new Promise((resolve) => {
+        resolveDaemonConfig = resolve;
+      }),
+    );
+
+    const { container } = render(<App />);
+
+    await waitFor(() => {
+      expect(mockedFetchDaemonConfig).toHaveBeenCalled();
+    });
+    expect(container.querySelector('.privacy-consent-banner')).toBeNull();
+
+    resolveDaemonConfig({});
+
+    await waitFor(() => {
+      expect(container.querySelector('.privacy-consent-banner')).toBeTruthy();
+    });
+    const banner = container.querySelector('.privacy-consent-banner');
+    expect(banner?.querySelector('.seg-control')).toBeNull();
+    expect(banner?.querySelector('.seg-btn.active')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Help improve' }).className).toContain(
+      'privacy-consent-action',
+    );
+  });
+
+  it('hides first-run privacy consent while settings is open', async () => {
+    const { container } = render(<App />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.privacy-consent-banner')).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open execution settings' }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Settings dialog' })).toBeTruthy();
+    });
+    expect(container.querySelector('.privacy-consent-banner')).toBeNull();
   });
 
   it('normalizes local persistence but sends the raw replacement key to the daemon on save', async () => {
@@ -226,11 +304,6 @@ describe('App connectors settings flows', () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open connectors settings' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Settings dialog' })).toBeTruthy();
-    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save connectors key' }));
 
@@ -279,11 +352,6 @@ describe('App connectors settings flows', () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Open connectors settings' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('dialog', { name: 'Settings dialog' })).toBeTruthy();
-    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear connectors key' }));
 
