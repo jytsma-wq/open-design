@@ -41,6 +41,10 @@
       "electron-winstaller",
       "esbuild",
       "sharp"
+    ],
+    "ignoredBuiltDependencies": [
+      "core-js",
+      "protobufjs"
     ]
   }
 }
