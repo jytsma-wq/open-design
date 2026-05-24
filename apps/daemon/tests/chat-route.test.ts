@@ -762,6 +762,28 @@ describe('chat prompt helpers', () => {
     expect(prompt).toContain('the first tool action must be the research command');
   });
 
+  it('keeps large project file lists compact before appending them to agent prompts', async () => {
+    const serverModule = await import('../src/server.js') as typeof import('../src/server.js') & {
+      composeProjectFilesListBlock?: (files: Array<{ name: string }>) => string;
+    };
+    const composeProjectFilesListBlock = serverModule.composeProjectFilesListBlock;
+
+    expect(typeof composeProjectFilesListBlock).toBe('function');
+    if (typeof composeProjectFilesListBlock !== 'function') return;
+
+    const files = Array.from({ length: 50_000 }, (_, index) => ({
+      name: `node_modules/package-${index}/dist/generated-file-${index}.js`,
+    }));
+
+    const block = composeProjectFilesListBlock(files);
+
+    expect(block.length).toBeLessThanOrEqual(60_000);
+    expect(block).toContain('Files already in this folder');
+    expect(block).toContain('Open Design omitted');
+    expect(block).toContain('generated-file-0.js');
+    expect(block).not.toContain('generated-file-49999.js');
+  });
+
   it('resolves only the narrow Codex generated_images allowlist for known gpt-image image projects', () => {
     expect(
       resolveCodexGeneratedImagesDir(

@@ -88,16 +88,22 @@ function codexNativeCandidates(
   packageSuffix: string,
   targetTriple: string,
 ): Array<{ path: string; childPathPrepend: string[] }> {
-  const scoped = path.join(root, 'node_modules', '@openai');
-  const packageDirs = [path.join(scoped, `codex-${packageSuffix}`)];
-  try {
-    for (const entry of readdirSync(scoped, { encoding: 'utf8', withFileTypes: true })) {
-      if (entry.isDirectory() && entry.name.startsWith('codex-')) packageDirs.push(path.join(scoped, entry.name));
+  const packageDirs = new Set<string>();
+  const scopedRoots = [
+    path.join(root, 'node_modules', '@openai'),
+    path.join(root, 'node_modules', '@openai', 'codex', 'node_modules', '@openai'),
+  ];
+  for (const scoped of scopedRoots) {
+    packageDirs.add(path.join(scoped, `codex-${packageSuffix}`));
+    try {
+      for (const entry of readdirSync(scoped, { encoding: 'utf8', withFileTypes: true })) {
+        if (entry.isDirectory() && entry.name.startsWith('codex-')) packageDirs.add(path.join(scoped, entry.name));
+      }
+    } catch {
+      // Optional package layouts vary by npm version; absence uses wrapper fallback.
     }
-  } catch {
-    // Optional package layouts vary by npm version; absence uses wrapper fallback.
   }
-  return [...new Set(packageDirs)].flatMap((dir) => {
+  return [...packageDirs].flatMap((dir) => {
     const vendorPathDir = path.join(dir, 'vendor', targetTriple, 'path');
     const childPathPrepend = [vendorPathDir];
     return [

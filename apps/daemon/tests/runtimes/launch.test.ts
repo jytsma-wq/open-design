@@ -11,6 +11,7 @@ import {
   resolveAgentLaunch,
   rmSync,
   tmpdir,
+  withPlatform,
   withEnvSnapshot,
   writeFileSync,
 } from './helpers/test-helpers.js';
@@ -85,6 +86,48 @@ fsTest('resolveAgentLaunch resolves a Codex npm wrapper to the native packaged b
       assert.deepEqual(launch.childPathPrepend, [wrapperLinkDir, realpathSync(nativePathDir)]);
       assert.equal(launch.diagnostic, null);
     });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('resolveAgentLaunch resolves a Windows npm codex.cmd wrapper to its nested native binary', () => {
+  const root = mkdtempSync(join(tmpdir(), 'od-launch-codex-win-wrapper-'));
+  try {
+    return withEnvSnapshot(['PATH', 'PATHEXT', 'OD_AGENT_HOME'], () =>
+      withPlatform('win32', () => {
+        const npmPrefix = join(root, 'npm');
+        const wrapperPath = join(npmPrefix, 'codex.CMD');
+        const wrapperPkgDir = join(npmPrefix, 'node_modules', '@openai', 'codex');
+        const nativePkgDir = join(
+          wrapperPkgDir,
+          'node_modules',
+          '@openai',
+          `codex-${process.platform}-${process.arch}`,
+        );
+        const nativeTargetTriple = codexNativeTargetTriple();
+        const nativePathDir = join(nativePkgDir, 'vendor', nativeTargetTriple, 'path');
+        const nativeBin = join(nativePkgDir, 'vendor', nativeTargetTriple, 'codex', 'codex.exe');
+        mkdirSync(npmPrefix, { recursive: true });
+        mkdirSync(join(nativePkgDir, 'vendor', nativeTargetTriple, 'codex'), { recursive: true });
+        mkdirSync(nativePathDir, { recursive: true });
+        writeFileSync(
+          wrapperPath,
+          '@ECHO off\r\n"%~dp0\\node.exe" "%~dp0\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n',
+        );
+        writeFileSync(nativeBin, '');
+        process.env.PATH = npmPrefix;
+        process.env.PATHEXT = '.EXE;.CMD;.BAT';
+        process.env.OD_AGENT_HOME = root;
+
+        const launch = resolveAgentLaunch(codex);
+
+        assert.equal(launch.selectedPath, wrapperPath);
+        assert.equal(launch.launchPath, nativeBin);
+        assert.equal(launch.launchKind, 'codex-native');
+        assert.deepEqual(launch.childPathPrepend, [npmPrefix, nativePathDir]);
+        assert.equal(launch.diagnostic, null);
+      }));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

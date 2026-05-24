@@ -89,6 +89,22 @@ describe('streamViaDaemon', () => {
     expect(transcript).toContain('small answer');
   });
 
+  it('keeps daemon context below the CLI input ceiling by omitting older turns', () => {
+    const history = Array.from({ length: 120 }, (_, index) => ({
+      id: `old-${index}`,
+      role: index % 2 === 0 ? ('user' as const) : ('assistant' as const),
+      content: `old turn ${index}\n${'x'.repeat(12_000)}`,
+    }));
+    history.push({ id: 'current', role: 'user', content: 'current retry request' });
+
+    const transcript = buildDaemonTranscript(history);
+
+    expect(transcript.length).toBeLessThanOrEqual(160_000);
+    expect(transcript).toContain('## context omitted');
+    expect(transcript).toContain('current retry request');
+    expect(transcript).not.toContain('old turn 0');
+  });
+
   it('adds a compact context warning for high-usage agent-browser doc runs', () => {
     const transcript = buildDaemonTranscript([
       {

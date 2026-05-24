@@ -1,0 +1,7 @@
+interface:
+  display_name: "Website Redesign Workbench"
+  short_description: "Make page design, style, and layout changes in live preview."
+  default_prompt: "Use $website-redesign-workbench in existing codebase mode. Open my current codebase in preview, do not create a new project or starter app, and make the requested design, style, and layout changes directly in the existing source files. Verify desktop and mobile, and do not deploy yet."
+
+policy:
+  allow_implicit_invocation: true

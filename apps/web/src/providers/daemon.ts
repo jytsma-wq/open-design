@@ -43,8 +43,10 @@ function detectClientType(): 'desktop' | 'web' | 'unknown' {
 import { parseSseFrame } from './sse';
 
 const MAX_TRANSCRIPT_MESSAGE_CHARS = 12_000;
+const MAX_DAEMON_TRANSCRIPT_CHARS = 160_000;
 const LARGE_TOOL_RESULT_CHARS = 8_000;
 const HIGH_INPUT_TOKEN_WARNING_THRESHOLD = 200_000;
+const TRANSCRIPT_SEPARATOR = '\n\n';
 
 export function latestUserPromptFromHistory(history: ChatMessage[]): string {
   for (let i = history.length - 1; i >= 0; i -= 1) {
@@ -58,6 +60,57 @@ function truncateForTranscript(content: string): string {
   if (content.length <= MAX_TRANSCRIPT_MESSAGE_CHARS) return content;
   const omitted = content.length - MAX_TRANSCRIPT_MESSAGE_CHARS;
   return `${content.slice(0, MAX_TRANSCRIPT_MESSAGE_CHARS)}\n\n[Open Design truncated ${omitted} chars from this prior message before sending it to the agent. Full content remains in persisted history.]`;
+}
+
+function transcriptEntry(message: ChatMessage): string {
+  return `## ${message.role}\n${truncateForTranscript(message.content.trim())}`;
+}
+
+function joinTranscriptParts(parts: string[]): string {
+  return parts.filter(Boolean).join(TRANSCRIPT_SEPARATOR);
+}
+
+function contextOmittedNotice(omittedMessages: number): string {
+  const noun = omittedMessages === 1 ? 'message' : 'messages';
+  return [
+    '## context omitted',
+    `Open Design omitted ${omittedMessages} older chat ${noun} before sending this turn to the local agent to stay under the CLI input limit.`,
+    'Use persisted history only as a reference; inspect project files directly when exact details matter.',
+  ].join('\n');
+}
+
+function buildBoundedHistoryTranscript(history: ChatMessage[], budget: number): string {
+  if (budget <= 0) return '';
+
+  const kept: string[] = [];
+  let omittedMessages = 0;
+
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const message = history[index];
+    if (!message) continue;
+    const entry = transcriptEntry(message);
+    const candidate = joinTranscriptParts([entry, ...kept]);
+    if (candidate.length > budget) {
+      omittedMessages = index + 1;
+      break;
+    }
+    kept.unshift(entry);
+  }
+
+  if (omittedMessages === 0) return joinTranscriptParts(kept);
+
+  let notice = contextOmittedNotice(omittedMessages);
+  while (kept.length > 1 && joinTranscriptParts([notice, ...kept]).length > budget) {
+    kept.shift();
+    omittedMessages += 1;
+    notice = contextOmittedNotice(omittedMessages);
+  }
+
+  const transcript = joinTranscriptParts([notice, ...kept]);
+  if (transcript.length <= budget) return transcript;
+
+  const latestTurn = kept.at(-1) ?? '';
+  return latestTurn.length <= budget ? latestTurn : latestTurn.slice(0, budget);
 }
 
 function compactInput(input: unknown): string {
@@ -118,11 +171,12 @@ function buildPriorRunContextWarning(history: ChatMessage[]): string | null {
 }
 
 export function buildDaemonTranscript(history: ChatMessage[]): string {
-  const transcript = history
-    .map((m) => `## ${m.role}\n${truncateForTranscript(m.content.trim())}`)
-    .join('\n\n');
   const warning = buildPriorRunContextWarning(history);
-  return warning ? `${warning}\n\n${transcript}` : transcript;
+  const transcriptBudget = warning
+    ? MAX_DAEMON_TRANSCRIPT_CHARS - warning.length - TRANSCRIPT_SEPARATOR.length
+    : MAX_DAEMON_TRANSCRIPT_CHARS;
+  const transcript = buildBoundedHistoryTranscript(history, transcriptBudget);
+  return joinTranscriptParts(warning ? [warning, transcript] : [transcript]);
 }
 
 export interface DaemonStreamHandlers extends StreamHandlers {
@@ -215,9 +269,8 @@ export async function streamViaDaemon({
   onRunStatus,
   onRunEventId,
 }: DaemonStreamOptions): Promise<void> {
-  // Local CLIs are single-turn print-mode programs, so we collapse the whole
-  // chat into one string. If this becomes too noisy for long histories, the
-  // fix is to only include the final user turn.
+  // Local CLIs are single-turn print-mode programs, so we send a compact,
+  // bounded transcript instead of the unbounded persisted chat history.
   const transcript = buildDaemonTranscript(history);
   const request: ChatRequest = {
     agentId,

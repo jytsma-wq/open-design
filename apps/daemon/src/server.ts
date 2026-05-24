@@ -467,6 +467,9 @@ export function verifyDesktopImportToken(
   return { ok: true, nonce, exp: expMs };
 }
 
+const MAX_PROJECT_FILES_PROMPT_CHARS = 60_000;
+const MAX_PROJECT_FILE_PROMPT_NAME_CHARS = 260;
+
 export function composeLiveInstructionPrompt({
   daemonSystemPrompt,
   runtimeToolPrompt,
@@ -489,6 +492,60 @@ export function composeLiveInstructionPrompt({
     parts.push(override);
   }
   return parts.join('\n\n---\n\n');
+}
+
+function projectFilePromptName(name) {
+  const value = typeof name === 'string' ? name.trim() : '';
+  if (value.length <= MAX_PROJECT_FILE_PROMPT_NAME_CHARS) return value;
+  return `${value.slice(0, MAX_PROJECT_FILE_PROMPT_NAME_CHARS - 3)}...`;
+}
+
+function projectFilesOmittedLine(count) {
+  return `- [Open Design omitted ${count} additional project files from this prompt; use the file browser or search tools if you need the full tree.]`;
+}
+
+export function composeProjectFilesListBlock(existingProjectFiles) {
+  const fileNames = Array.isArray(existingProjectFiles)
+    ? existingProjectFiles
+        .map((file) => projectFilePromptName(file?.name))
+        .filter(Boolean)
+    : [];
+
+  if (!fileNames.length) {
+    return '\nThis folder is empty. Choose a clear, descriptive filename for whatever you create.';
+  }
+
+  const header =
+    '\nFiles already in this folder (do NOT overwrite unless the user asks; pick a fresh, descriptive name for new artifacts):\n';
+  const lines = [];
+  let omitted = 0;
+
+  for (let index = 0; index < fileNames.length; index += 1) {
+    const line = `- ${fileNames[index]}`;
+    const remaining = fileNames.length - index - 1;
+    const omissionSuffix = remaining > 0 ? `\n${projectFilesOmittedLine(remaining)}` : '';
+    const candidate = `${header}${[...lines, line].join('\n')}${omissionSuffix}`;
+    if (candidate.length > MAX_PROJECT_FILES_PROMPT_CHARS) {
+      omitted = fileNames.length - index;
+      break;
+    }
+    lines.push(line);
+  }
+
+  if (omitted > 0) {
+    while (lines.length > 0) {
+      const block = `${header}${[...lines, projectFilesOmittedLine(omitted)].join('\n')}`;
+      if (block.length <= MAX_PROJECT_FILES_PROMPT_CHARS) return block;
+      lines.pop();
+      omitted += 1;
+    }
+    const fallback = `${header}${projectFilesOmittedLine(fileNames.length)}`;
+    return fallback.length <= MAX_PROJECT_FILES_PROMPT_CHARS
+      ? fallback
+      : fallback.slice(0, MAX_PROJECT_FILES_PROMPT_CHARS);
+  }
+
+  return `${header}${lines.join('\n')}`;
 }
 
 function renderPluginBriefTemplate(template, inputs = {}) {
@@ -8191,11 +8248,7 @@ export async function startServer({
     // doesn't have to guess what the user just dropped in.
     // Also ship the current file listing so the agent can pick a unique
     // filename instead of clobbering a previous artifact.
-    const filesListBlock = existingProjectFiles.length
-      ? `\nFiles already in this folder (do NOT overwrite unless the user asks; pick a fresh, descriptive name for new artifacts):\n${existingProjectFiles
-          .map((f) => `- ${f.name}`)
-          .join('\n')}`
-      : '\nThis folder is empty. Choose a clear, descriptive filename for whatever you create.';
+    const filesListBlock = composeProjectFilesListBlock(existingProjectFiles);
     const projectRecord =
       typeof projectId === 'string' && projectId
         ? getProject(db, projectId)
