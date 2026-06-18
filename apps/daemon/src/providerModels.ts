@@ -9,8 +9,13 @@ import type {
 } from '@open-design/contracts/api/providerModels';
 import { isLoopbackApiHost } from '@open-design/contracts/api/connectionTest';
 import { redactSecrets, validateBaseUrlResolved } from './connectionTest.js';
+import { googleProviderModelsUrl, normalizeGoogleModelId } from './google-models.js';
+import { aihubmixHeaders, aihubmixCatalogUrl, parseAIHubMixCatalog } from './aihubmix.js';
 
-type ProviderModelsInput = ProviderModelsRequest & { signal?: AbortSignal };
+type ProviderModelsInput = ProviderModelsRequest & {
+  signal?: AbortSignal;
+  requestInit?: Pick<RequestInit, 'dispatcher'>;
+};
 
 const PROVIDER_MODELS_TIMEOUT_MS = 12_000;
 
@@ -114,11 +119,10 @@ function extractAnthropicModels(data: unknown): ProviderModelOption[] {
 
 function googleModelId(rawName: unknown, rawBaseModelId: unknown): string {
   if (typeof rawBaseModelId === 'string' && rawBaseModelId.trim()) {
-    return rawBaseModelId.trim();
+    return normalizeGoogleModelId(rawBaseModelId);
   }
   if (typeof rawName !== 'string') return '';
-  const name = rawName.trim();
-  return name.startsWith('models/') ? name.slice('models/'.length) : name;
+  return normalizeGoogleModelId(rawName);
 }
 
 function supportsGoogleGenerateContent(item: unknown): boolean {
@@ -149,16 +153,21 @@ function extractGoogleModels(data: unknown): ProviderModelOption[] {
 }
 
 function providerModelsUrl(protocol: ConnectionTestProtocol, baseUrl: string, apiKey: string): string {
-  if (protocol === 'openai') return appendVersionedApiPath(baseUrl, '/models');
+  if (protocol === 'aihubmix') {
+    // AIHubMix exposes its chat catalogue on a dedicated endpoint
+    // (GET /api/v1/models?type=llm), not the OpenAI /v1/models route.
+    return aihubmixCatalogUrl(baseUrl, 'llm');
+  }
+  if (protocol === 'openai' || protocol === 'senseaudio') {
+    return appendVersionedApiPath(baseUrl, '/models');
+  }
   if (protocol === 'anthropic') {
     const url = new URL(appendVersionedApiPath(baseUrl, '/models'));
     url.searchParams.set('limit', '1000');
     return url.toString();
   }
   if (protocol === 'google') {
-    const url = new URL(`${baseUrl.replace(/\/+$/, '')}/v1beta/models`);
-    url.searchParams.set('key', apiKey);
-    return url.toString();
+    return googleProviderModelsUrl(baseUrl, apiKey);
   }
   throw new Error(`Unsupported protocol: ${protocol}`);
 }
@@ -167,7 +176,15 @@ function providerModelsHeaders(
   protocol: ConnectionTestProtocol,
   apiKey: string,
 ): Record<string, string> {
-  if (protocol === 'openai') return { authorization: `Bearer ${apiKey}` };
+  if (protocol === 'openai' || protocol === 'senseaudio') {
+    return { authorization: `Bearer ${apiKey}` };
+  }
+  if (protocol === 'aihubmix') {
+    // The catalogue is public — only attach Bearer auth (+ APP-Code) when the
+    // user actually supplied a key. An empty `Bearer ` would be rejected by
+    // some gateways, so send no headers when the key is blank.
+    return apiKey.trim() ? aihubmixHeaders(apiKey) : {};
+  }
   if (protocol === 'anthropic') {
     return {
       'x-api-key': apiKey,
@@ -178,7 +195,14 @@ function providerModelsHeaders(
 }
 
 function extractModels(protocol: ConnectionTestProtocol, data: unknown): ProviderModelOption[] {
-  if (protocol === 'openai') return extractOpenAiModels(data);
+  // SenseAudio's /v1/models response follows the OpenAI envelope
+  // (`{ data: [{ id, ... }] }`), so the same extractor handles both.
+  // Chat picker: drop media-generation rows. AIHubMix's `?type=llm` matches any
+  // model whose `types` merely contains `llm`, so dual-tagged image models
+  // (e.g. gpt-image-2 → "image_generation,llm") would otherwise leak in. Those
+  // belong to the dedicated image/video/audio pickers.
+  if (protocol === 'aihubmix') return parseAIHubMixCatalog(data, { chatOnly: true });
+  if (protocol === 'openai' || protocol === 'senseaudio') return extractOpenAiModels(data);
   if (protocol === 'anthropic') return extractAnthropicModels(data);
   if (protocol === 'google') return extractGoogleModels(data);
   return [];
@@ -232,6 +256,7 @@ export async function listProviderModels(
     const response = await fetch(url, {
       method: 'GET',
       headers: providerModelsHeaders(input.protocol, input.apiKey),
+      ...input.requestInit,
       signal: controller.signal,
       redirect: 'error',
     });

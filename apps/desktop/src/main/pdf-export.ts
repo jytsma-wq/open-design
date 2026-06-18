@@ -8,6 +8,17 @@ type PageSize = { height: number; width: number };
 const DECK_PAGE_SIZE: PageSize = { width: 13.333333, height: 7.5 };
 const MAX_PAGE_INCHES = 200;
 
+export type PrintReadyPdfOptions = {
+  deck?: boolean;
+};
+
+type PrintToPdfOptions = {
+  margins: { bottom: number; left: number; right: number; top: number };
+  pageSize: PageSize;
+  preferCSSPageSize: boolean;
+  printBackground: boolean;
+};
+
 const DECK_PRINT_CSS = `
 @media print {
   @page { size: 1920px 1080px; margin: 0; }
@@ -69,12 +80,7 @@ export async function exportPdfFromHtml(input: DesktopExportPdfInput): Promise<D
     await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(buildPrintableDocument(input))}`);
     await waitForPrintableContent(window);
     const pageSize = input.deck ? DECK_PAGE_SIZE : await inferPageSize(window);
-    const pdf = await window.webContents.printToPDF({
-      margins: { bottom: 0, left: 0, right: 0, top: 0 },
-      pageSize,
-      preferCSSPageSize: true,
-      printBackground: true,
-    });
+    const pdf = await window.webContents.printToPDF(printToPdfOptions(pageSize));
     await writeFile(save.filePath, pdf);
     return { ok: true, path: save.filePath };
   } catch (error) {
@@ -82,6 +88,157 @@ export async function exportPdfFromHtml(input: DesktopExportPdfInput): Promise<D
   } finally {
     if (!window.isDestroyed()) window.destroy();
   }
+}
+
+/**
+ * Default Save-dialog filename for a print-ready document. The
+ * renderer's `printPdf()` bridge sends the document, nonce, and print
+ * options — no title — but `buildSandboxedPreviewDocument` stamps the
+ * export title into the wrapper's <title>, so we recover it from there.
+ * Falls back to `artifact.pdf` when no usable title is present.
+ */
+export function pdfFilenameFromDocument(html: string): string {
+  const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+  const title = match ? decodeBasicEntities(match[1]).trim() : "";
+  return `${safeFilename(title, "artifact")}.pdf`;
+}
+
+/**
+ * Electron surface consumed by {@link savePrintReadyDocumentAsPdf},
+ * declared structurally — like `WindowFullscreenSurface` in runtime.ts
+ * — so the save-as-PDF flow is unit-testable with plain stubs instead
+ * of a real `dialog` + `BrowserWindow`.
+ *
+ * There is deliberately no `print()` here. Issue #1774's bug was the
+ * `od:print-pdf` IPC handler reaching for `webContents.print()`, which
+ * opens the printer-first OS dialog; `printToPdf()` is the only render
+ * path this surface offers, so that regression cannot be reintroduced.
+ */
+export type PrintReadyPdfTarget = {
+  /** Native "Save PDF" dialog. Resolves the chosen path, or null on cancel. */
+  promptSavePath: (defaultFilename: string) => Promise<string | null>;
+  /** Load the print-ready document into a hidden render surface. */
+  load: (html: string, options: PrintReadyPdfOptions) => Promise<void>;
+  /** Resolve once the document signals print-readiness for `nonce`. */
+  waitUntilReady: (nonce: string) => Promise<void>;
+  /** Measure non-deck content so dialogless PDFs do not fall back to Letter. */
+  measurePageSize: () => Promise<PageSize>;
+  /** Render the loaded document to PDF bytes (Electron printToPDF). */
+  printToPdf: (options: PrintToPdfOptions) => Promise<Uint8Array>;
+  /** Write the PDF bytes to `filePath`. */
+  write: (filePath: string, data: Uint8Array) => Promise<void>;
+  /** Tear down the render surface. Always invoked, including on cancel/error. */
+  dispose: () => void;
+};
+
+/**
+ * Direct Save-as-PDF flow for the renderer host PDF bridge (the
+ * `od:print-pdf` IPC handler).
+ *
+ * Unlike {@link exportPdfFromHtml}, the document handed over here is
+ * already a fully-wrapped sandboxed preview carrying the print-ready
+ * handshake (built by apps/web/src/runtime/exports.ts#exportAsPdf), so
+ * this flow does not build the printable document — it loads it as-is,
+ * waits for the handshake, and renders straight to the file the user
+ * picked.
+ *
+ * Invariant (issue #1774): PDF export shows the native Save dialog and
+ * writes the file to disk. It never opens the printer-first OS print
+ * dialog — `webContents.print()` is not on the {@link PrintReadyPdfTarget}
+ * surface at all. A canceled Save dialog is a successful no-op.
+ */
+export async function savePrintReadyDocumentAsPdf(
+  html: string,
+  nonce: string,
+  target: PrintReadyPdfTarget,
+  options: PrintReadyPdfOptions = {},
+): Promise<DesktopExportPdfResult> {
+  const savePath = await target.promptSavePath(pdfFilenameFromDocument(html));
+  if (savePath == null) {
+    target.dispose();
+    return { canceled: true, ok: true };
+  }
+  try {
+    await target.load(html, options);
+    await target.waitUntilReady(nonce);
+    const pageSize = options.deck ? DECK_PAGE_SIZE : await target.measurePageSize();
+    const pdf = await target.printToPdf(printToPdfOptions(pageSize));
+    await target.write(savePath, pdf);
+    return { ok: true, path: savePath };
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error), ok: false };
+  } finally {
+    target.dispose();
+  }
+}
+
+/**
+ * Production {@link PrintReadyPdfTarget} backed by a real Electron
+ * `dialog` and a hidden `BrowserWindow`. The render window is created
+ * lazily in `load`, so a canceled Save dialog never spins one up.
+ */
+export function createElectronPdfTarget(): PrintReadyPdfTarget {
+  let window: BrowserWindow | null = null;
+  return {
+    async promptSavePath(defaultFilename) {
+      const save = await dialog.showSaveDialog({
+        defaultPath: defaultFilename,
+        filters: [
+          { name: "PDF", extensions: ["pdf"] },
+          { name: "All Files", extensions: ["*"] },
+        ],
+        title: "Save PDF",
+      });
+      return save.canceled || !save.filePath ? null : save.filePath;
+    },
+    async load(html, options) {
+      const printWindow = new BrowserWindow({
+        height: options.deck ? 1080 : 900,
+        show: false,
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: true,
+        },
+        width: options.deck ? 1920 : 1440,
+      });
+      window = printWindow;
+      printWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+      printWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+      await printWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    },
+    async waitUntilReady(nonce) {
+      if (!window) throw new Error("PDF render window has not been loaded");
+      await waitForPrintReadyHandshake(window.webContents, nonce);
+    },
+    async measurePageSize() {
+      if (!window) throw new Error("PDF render window has not been loaded");
+      return inferPageSize(window);
+    },
+    async printToPdf(options) {
+      if (!window) throw new Error("PDF render window has not been loaded");
+      // printToPDF() is the dialogless render path: the "Save as PDF"
+      // equivalent of webContents.print() without the printer-first OS
+      // dialog (issue #1774).
+      return window.webContents.printToPDF(options);
+    },
+    async write(filePath, data) {
+      await writeFile(filePath, data);
+    },
+    dispose() {
+      if (window && !window.isDestroyed()) window.destroy();
+      window = null;
+    },
+  };
+}
+
+function printToPdfOptions(pageSize: PageSize): PrintToPdfOptions {
+  return {
+    margins: { bottom: 0, left: 0, right: 0, top: 0 },
+    pageSize,
+    preferCSSPageSize: true,
+    printBackground: true,
+  };
 }
 
 function buildPrintableDocument(input: DesktopExportPdfInput): string {
@@ -115,16 +272,58 @@ function injectPrintStylesheet(doc: string, css: string): string {
 
 export async function waitForPrintableContent(window: BrowserWindow): Promise<void> {
   await window.webContents.executeJavaScript(
-    `Promise.all([
-      document.fonts && document.fonts.ready ? document.fonts.ready.catch(function(){}) : Promise.resolve(),
-      Promise.all(Array.from(document.images || []).map(function(img) {
-        if (img.complete) return Promise.resolve();
-        return new Promise(function(resolve) {
-          img.addEventListener('load', resolve, { once: true });
-          img.addEventListener('error', resolve, { once: true });
+    `(function() {
+      function waitForImages() {
+        return Promise.all(Array.from(document.images || []).map(function(img) {
+          if (img.complete) return Promise.resolve();
+          return new Promise(function(resolve) {
+            img.addEventListener('load', resolve, { once: true });
+            img.addEventListener('error', resolve, { once: true });
+          });
+        }));
+      }
+
+      function cssUrlValues(value) {
+        var urls = [];
+        if (!value || value === 'none') return urls;
+        value.replace(/url\\((['"]?)(.*?)\\1\\)/g, function(_, _quote, rawUrl) {
+          if (rawUrl && !/^data:/i.test(rawUrl)) urls.push(rawUrl);
+          return '';
         });
-      }))
-    ]).then(function(){ return true; })`,
+        return urls;
+      }
+
+      function waitForCssBackgroundImages() {
+        var urls = new Set();
+        Array.from(document.querySelectorAll('*')).forEach(function(el) {
+          var style = window.getComputedStyle(el);
+          cssUrlValues(style.backgroundImage).forEach(function(url) { urls.add(url); });
+          cssUrlValues(style.borderImageSource).forEach(function(url) { urls.add(url); });
+          cssUrlValues(style.listStyleImage).forEach(function(url) { urls.add(url); });
+        });
+        return Promise.all(Array.from(urls).map(function(url) {
+          return new Promise(function(resolve) {
+            var img = new Image();
+            img.onload = resolve;
+            img.onerror = resolve;
+            img.src = url;
+          });
+        }));
+      }
+
+      function nextFrame() {
+        return new Promise(function(resolve) { requestAnimationFrame(function() { resolve(true); }); });
+      }
+
+      return Promise.all([
+        document.fonts && document.fonts.ready ? document.fonts.ready.catch(function(){}) : Promise.resolve(),
+        waitForImages(),
+        waitForCssBackgroundImages()
+      ])
+        .then(nextFrame)
+        .then(nextFrame)
+        .then(function(){ return true; });
+    })()`,
     true,
   );
 }
@@ -163,9 +362,27 @@ export async function waitForPrintReadyHandshake(webContents: Electron.WebConten
   await Promise.race([handshake, timeout]);
 }
 
-async function inferPageSize(window: BrowserWindow): Promise<PageSize> {
+export async function inferPageSize(window: BrowserWindow): Promise<PageSize> {
   const size = await window.webContents.executeJavaScript(
+    // Prefer the content size the artifact reported through the print-ready
+    // handshake (window.__odPrintSize, cached by injectParentPrintReadyCache
+    // in apps/web/src/runtime/exports.ts). For the sandboxed-preview export
+    // path the loaded document is a wrapper whose <body> is `overflow:hidden`
+    // around a 100%x100% sandboxed <iframe>, so measuring the wrapper here only
+    // ever yields the window viewport — never the artifact's true dimensions —
+    // which sizes the page to a single viewport and clips (or blanks, when the
+    // visible content sits below the fold) taller artifacts. The iframe is
+    // `sandbox="allow-scripts"` with no `allow-same-origin`, so the wrapper
+    // cannot read iframe.contentDocument; the size must come from inside the
+    // artifact, which is exactly what the handshake reports. Fall back to the
+    // direct measurement for the daemon-backed exportPdfFromHtml() path, where
+    // the artifact itself is the loaded document and no handshake runs.
     `(() => {
+      const reported = window.__odPrintSize;
+      if (reported && Number.isFinite(reported.width) && Number.isFinite(reported.height)
+        && reported.width > 0 && reported.height > 0) {
+        return { width: reported.width, height: reported.height };
+      }
       const de = document.documentElement;
       const body = document.body || de;
       return {
@@ -200,4 +417,34 @@ function escapeHtmlText(value: string): string {
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+// Named entities the export pipeline can escape into a <title>
+// (escapeHtmlAttribute / escapeHtmlText emit `& " < >`). `&amp;` is
+// decoded last so a doubly-escaped `&amp;lt;` does not collapse to `<`.
+const BASIC_HTML_ENTITIES: ReadonlyArray<readonly [RegExp, string]> = [
+  [/&lt;/gi, "<"],
+  [/&gt;/gi, ">"],
+  [/&quot;/gi, '"'],
+  [/&#39;/g, "'"],
+  [/&amp;/gi, "&"],
+];
+
+function decodeBasicEntities(value: string): string {
+  return BASIC_HTML_ENTITIES.reduce(
+    (acc, [pattern, char]) => acc.replace(pattern, char),
+    value,
+  );
+}
+
+// Slugify a title into a filesystem-safe filename stem. Mirrors the
+// `safeFilename` helpers in apps/daemon/src/pdf-export.ts and
+// apps/web/src/runtime/exports.ts so the desktop Save dialog's default
+// filename matches the daemon-backed export path.
+function safeFilename(name: string, fallback: string): string {
+  const slug = (name || fallback)
+    .replace(/[^\w.\-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+  return slug || fallback;
 }

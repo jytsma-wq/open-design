@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
-import { useT } from '../i18n';
+import { Button } from '@open-design/components';
+import { useI18n, useT } from '../i18n';
+import {
+  localizeSkillDescription,
+  localizeSkillName,
+} from '../i18n/content';
 import { Icon } from './Icon';
 import type { AppConfig } from '../types';
 import type { SkillSummary } from '@open-design/contracts';
@@ -30,6 +35,15 @@ import {
 interface Props {
   cfg: AppConfig;
   setCfg: Dispatch<SetStateAction<AppConfig>>;
+  onSkillsRefresh?: () => Promise<void> | void;
+  /**
+   * Fires after every successful skill registry mutation so the App
+   * shell can refresh derived state and evict any preview iframe whose
+   * project depends on the affected skill — body-only edits do not move
+   * any SkillSummary field, so ProjectView's signature-based eviction
+   * cannot see them on its own.
+   */
+  onSkillsChanged?: (affectedSkillId?: string) => void;
 }
 
 type SourceFilter = 'all' | 'user' | 'built-in';
@@ -64,8 +78,8 @@ function parseTriggers(raw: string): string[] {
     .filter(Boolean);
 }
 
-export function SkillsSection({ cfg, setCfg }: Props) {
-  const t = useT();
+export function SkillsSection({ cfg, setCfg, onSkillsRefresh, onSkillsChanged }: Props) {
+  const { locale, t } = useI18n();
 
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [search, setSearch] = useState('');
@@ -104,6 +118,12 @@ export function SkillsSection({ cfg, setCfg }: Props) {
   // Only one skill can be in the 'confirm pending' state at a time; the
   // user clicks once to arm, twice to commit.
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Editing a built-in skill writes a user-owned shadow copy and hides
+  // the built-in entry from the list. Arm an inline confirmation first
+  // so the listing change doesn't feel like a silent conversion (#1378).
+  const [confirmBuiltInEditId, setConfirmBuiltInEditId] = useState<
+    string | null
+  >(null);
 
   const refresh = useCallback(async () => {
     const list = await fetchSkills();
@@ -150,12 +170,12 @@ export function SkillsSection({ cfg, setCfg }: Props) {
       if (categoryFilter !== 'all' && s.category !== categoryFilter)
         return false;
       if (!q) return true;
-      const hay = `${s.name}\n${s.description}\n${(s.triggers ?? []).join(
+      const hay = `${s.name}\n${localizeSkillName(locale, s)}\n${s.description}\n${localizeSkillDescription(locale, s)}\n${(s.triggers ?? []).join(
         ' ',
       )}\n${s.category ?? ''}`;
       return hay.toLowerCase().includes(q);
     });
-  }, [skills, modeFilter, sourceFilter, categoryFilter, search]);
+  }, [skills, modeFilter, sourceFilter, categoryFilter, search, locale]);
 
   const ensureBody = useCallback(
     async (id: string) => {
@@ -199,6 +219,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
       // Switching rows aborts any in-flight edit on the previous row.
       setEditingId((cur) => (cur === id ? cur : null));
       setConfirmDeleteId(null);
+      setConfirmBuiltInEditId(null);
     },
     [ensureBody, ensureFiles],
   );
@@ -209,6 +230,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     setDraftError(null);
     setEditingId(null);
     setConfirmDeleteId(null);
+    setConfirmBuiltInEditId(null);
   }, []);
 
   const startEdit = useCallback(
@@ -220,9 +242,26 @@ export function SkillsSection({ cfg, setCfg }: Props) {
       setExpandedId(skill.id);
       setCreating(false);
       setConfirmDeleteId(null);
+      setConfirmBuiltInEditId(null);
     },
     [ensureBody],
   );
+
+  const requestEdit = useCallback(
+    (skill: SkillSummary) => {
+      if (skill.source === 'built-in') {
+        setConfirmBuiltInEditId(skill.id);
+        setConfirmDeleteId(null);
+        return;
+      }
+      void startEdit(skill);
+    },
+    [startEdit],
+  );
+
+  const cancelBuiltInEdit = useCallback(() => {
+    setConfirmBuiltInEditId(null);
+  }, []);
 
   const cancelDraft = useCallback(() => {
     setDraft(EMPTY_DRAFT);
@@ -236,11 +275,11 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     const name = draft.name.trim();
     const body = draft.body.trim();
     if (!name) {
-      setDraftError('Skill name is required.');
+      setDraftError(t('settings.skillsNameRequired'));
       return;
     }
     if (!body) {
-      setDraftError('Skill body is required.');
+      setDraftError(t('settings.skillsBodyRequired'));
       return;
     }
     const triggers = parseTriggers(draft.triggers);
@@ -263,6 +302,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     }
     const updated = result.skill;
     await refresh();
+    await onSkillsRefresh?.();
     setBodyById((cur) => ({ ...cur, [updated.id]: body }));
     // Drop the cached file tree for this id so the next expand
     // re-walks the on-disk folder; SKILL.md may have been the only
@@ -276,7 +316,8 @@ export function SkillsSection({ cfg, setCfg }: Props) {
     setEditingId(null);
     setCreating(false);
     setDraft(EMPTY_DRAFT);
-  }, [draft, draftSaving, editingId, refresh]);
+    onSkillsChanged?.(updated.id);
+  }, [draft, draftSaving, editingId, onSkillsChanged, onSkillsRefresh, refresh]);
 
   const armDelete = useCallback((id: string) => {
     setConfirmDeleteId(id);
@@ -295,6 +336,7 @@ export function SkillsSection({ cfg, setCfg }: Props) {
       }
       setConfirmDeleteId(null);
       await refresh();
+      await onSkillsRefresh?.();
       setBodyById((cur) => {
         const next = { ...cur };
         delete next[id];
@@ -317,8 +359,9 @@ export function SkillsSection({ cfg, setCfg }: Props) {
         setEditingId(null);
         setDraft(EMPTY_DRAFT);
       }
+      onSkillsChanged?.(id);
     },
-    [editingId, expandedId, refresh, setCfg],
+    [editingId, expandedId, onSkillsChanged, onSkillsRefresh, refresh, setCfg],
   );
 
   const toggleEnabled = useCallback(
@@ -455,13 +498,16 @@ export function SkillsSection({ cfg, setCfg }: Props) {
                 files={filesById[skill.id] ?? null}
                 filesLoading={filesLoadingId === skill.id}
                 confirmDelete={confirmDeleteId === skill.id}
+                confirmBuiltInEdit={confirmBuiltInEditId === skill.id}
                 draft={isEditing ? draft : null}
                 draftError={isEditing ? draftError : null}
                 draftSaving={isEditing && draftSaving}
                 setDraft={setDraft}
                 onToggleExpanded={() => toggleExpanded(skill.id)}
                 onToggleEnabled={(e) => toggleEnabled(skill.id, e)}
-                onStartEdit={() => void startEdit(skill)}
+                onStartEdit={() => requestEdit(skill)}
+                onConfirmBuiltInEdit={() => void startEdit(skill)}
+                onCancelBuiltInEdit={cancelBuiltInEdit}
                 onArmDelete={() => armDelete(skill.id)}
                 onCancelDelete={cancelDelete}
                 onCommitDelete={() => void commitDelete(skill.id)}
@@ -486,6 +532,7 @@ interface SkillRowProps {
   files: SkillFileEntry[] | null;
   filesLoading: boolean;
   confirmDelete: boolean;
+  confirmBuiltInEdit: boolean;
   draft: DraftState | null;
   draftError: string | null;
   draftSaving: boolean;
@@ -493,6 +540,8 @@ interface SkillRowProps {
   onToggleExpanded: () => void;
   onToggleEnabled: (enabled: boolean) => void;
   onStartEdit: () => void;
+  onConfirmBuiltInEdit: () => void;
+  onCancelBuiltInEdit: () => void;
   onArmDelete: () => void;
   onCancelDelete: () => void;
   onCommitDelete: () => void;
@@ -510,6 +559,7 @@ function SkillRow({
   files,
   filesLoading,
   confirmDelete,
+  confirmBuiltInEdit,
   draft,
   draftError,
   draftSaving,
@@ -517,6 +567,8 @@ function SkillRow({
   onToggleExpanded,
   onToggleEnabled,
   onStartEdit,
+  onConfirmBuiltInEdit,
+  onCancelBuiltInEdit,
   onArmDelete,
   onCancelDelete,
   onCommitDelete,
@@ -524,7 +576,9 @@ function SkillRow({
   onSubmitEdit,
 }: SkillRowProps) {
   const t = useT();
-  const summaryName = skill.name || skill.id;
+  const { locale } = useI18n();
+  const summaryName = localizeSkillName(locale, skill) || skill.id;
+  const summaryDescription = localizeSkillDescription(locale, skill);
   const canDelete = skill.source === 'user';
   return (
     <div
@@ -565,8 +619,8 @@ function SkillRow({
                 </span>
               ) : null}
             </span>
-            {skill.description ? (
-              <span className="skills-row-summary-desc">{skill.description}</span>
+            {summaryDescription ? (
+              <span className="skills-row-summary-desc">{summaryDescription}</span>
             ) : null}
           </span>
           <span className="skills-row-chevron" aria-hidden>
@@ -594,25 +648,23 @@ function SkillRow({
             </span>
           ) : (
             <>
-              <button
-                type="button"
-                className="icon-btn"
+              <Button
+                size="icon"
                 onClick={onStartEdit}
                 title={t('settings.skillsEdit')}
                 data-testid="skills-edit"
               >
                 <Icon name="edit" size={13} />
-              </button>
+              </Button>
               {canDelete ? (
-                <button
-                  type="button"
-                  className="icon-btn"
+                <Button
+                  size="icon"
                   onClick={onArmDelete}
                   title={t('settings.skillsDelete')}
                   data-testid="skills-delete"
                 >
                   <Icon name="close" size={13} />
-                </button>
+                </Button>
               ) : null}
             </>
           )}
@@ -630,6 +682,38 @@ function SkillRow({
           </label>
         </div>
       </div>
+
+      {confirmBuiltInEdit ? (
+        <div
+          className="skills-edit-builtin-warning"
+          role="alert"
+          data-testid="skills-edit-builtin-warning"
+        >
+          <p>
+            Editing this built-in skill creates a user override. The built-in
+            entry will be hidden from the list until you delete the override.
+            Continue?
+          </p>
+          <div className="skills-edit-builtin-actions">
+            <button
+              type="button"
+              className="btn ghost"
+              onClick={onCancelBuiltInEdit}
+              data-testid="skills-edit-builtin-cancel"
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              type="button"
+              className="btn primary"
+              onClick={onConfirmBuiltInEdit}
+              data-testid="skills-edit-builtin-confirm"
+            >
+              {t('settings.skillsEdit')}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {expanded && !editing ? (
         <div className="skills-row-detail">

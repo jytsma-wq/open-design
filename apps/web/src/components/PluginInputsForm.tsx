@@ -14,8 +14,14 @@
 //     metadata so project creation can still pass JSON cleanly.
 //   - Default values pre-fill the field on mount.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { InputFieldSpec } from '@open-design/contracts';
+import { useI18n } from '../i18n';
+import {
+  localizePluginDisplayValue,
+  localizePluginInputLabel,
+  localizePluginPlaceholder,
+} from '../i18n/plugin-content';
 
 interface Props {
   fields: InputFieldSpec[];
@@ -25,12 +31,19 @@ interface Props {
 }
 
 export function PluginInputsForm(props: Props) {
+  const { locale } = useI18n();
   const fields = props.fields ?? [];
+  const onValidityChangeRef = useRef(props.onValidityChange);
+  const lastValidityRef = useRef<boolean | null>(null);
   const required = useMemo(
     () => fields.filter((f) => f.required === true).map((f) => f.name),
     [fields],
   );
   const [values, setValues] = useState<Record<string, unknown>>(props.values ?? {});
+
+  useEffect(() => {
+    onValidityChangeRef.current = props.onValidityChange;
+  }, [props.onValidityChange]);
 
   useEffect(() => {
     setValues(props.values ?? {});
@@ -60,8 +73,10 @@ export function PluginInputsForm(props: Props) {
       const v = values[name];
       return v !== undefined && v !== null && v !== '';
     });
-    props.onValidityChange?.(valid);
-  }, [values, required, props]);
+    if (lastValidityRef.current === valid) return;
+    lastValidityRef.current = valid;
+    onValidityChangeRef.current?.(valid);
+  }, [values, required]);
 
   if (fields.length === 0) return null;
 
@@ -82,10 +97,10 @@ export function PluginInputsForm(props: Props) {
           data-filled={hasFieldValue(values[field.name]) ? 'true' : 'false'}
         >
           <span className="plugin-inputs-form__label">
-            {field.label ?? field.name}
+            {localizePluginInputLabel(locale, field)}
             {field.required ? <span className="plugin-inputs-form__required">*</span> : null}
           </span>
-          {renderField(field, values[field.name], (v) => update(field.name, v))}
+          {renderField(field, values[field.name], (v) => update(field.name, v), locale)}
         </label>
       ))}
     </div>
@@ -96,9 +111,11 @@ function renderField(
   field: InputFieldSpec,
   value: unknown,
   onChange: (value: unknown) => void,
+  locale: ReturnType<typeof useI18n>['locale'],
 ) {
   const type = fieldType(field);
   if (type === 'select' && Array.isArray(field.options)) {
+    const optionLabels = optionLabelMap(field);
     return (
       <select
         className="plugin-inputs-form__input"
@@ -106,10 +123,10 @@ function renderField(
         onChange={(e) => onChange(e.target.value)}
         data-field-name={field.name}
       >
-        <option value="">{field.placeholder ?? 'Select…'}</option>
+        <option value="">{localizePluginPlaceholder(locale, field.placeholder, 'Select…')}</option>
         {field.options.map((opt) => (
           <option key={opt} value={opt}>
-            {opt}
+            {localizePluginDisplayValue(locale, optionLabels[opt] ?? opt)}
           </option>
         ))}
       </select>
@@ -121,7 +138,7 @@ function renderField(
         type="number"
         className="plugin-inputs-form__input"
         value={value === undefined || value === null ? '' : String(value)}
-        placeholder={field.placeholder ?? ''}
+        placeholder={localizePluginPlaceholder(locale, field.placeholder)}
         onChange={(e) => {
           const raw = e.target.value;
           if (raw === '') return onChange(undefined);
@@ -158,7 +175,7 @@ function renderField(
           {...(typeof field.accept === 'string' ? { accept: field.accept } : {})}
         />
         <span className="plugin-inputs-form__file-label">
-          {fileValue ?? field.placeholder ?? 'Choose file…'}
+          {fileValue ?? localizePluginPlaceholder(locale, field.placeholder, 'Choose file…')}
         </span>
       </span>
     );
@@ -169,7 +186,7 @@ function renderField(
         className="plugin-inputs-form__input plugin-inputs-form__input--textarea"
         rows={3}
         value={value === undefined || value === null ? '' : String(value)}
-        placeholder={field.placeholder ?? ''}
+        placeholder={localizePluginPlaceholder(locale, field.placeholder)}
         onChange={(e) => onChange(e.target.value)}
         data-field-name={field.name}
       />
@@ -180,7 +197,7 @@ function renderField(
       type="text"
       className="plugin-inputs-form__input"
       value={value === undefined || value === null ? '' : String(value)}
-      placeholder={field.placeholder ?? ''}
+      placeholder={localizePluginPlaceholder(locale, field.placeholder)}
       onChange={(e) => onChange(e.target.value)}
       data-field-name={field.name}
     />
@@ -191,6 +208,13 @@ function fieldType(field: InputFieldSpec): string {
   const rawType = (field as { type?: unknown }).type;
   const raw = typeof rawType === 'string' ? rawType : 'string';
   return raw === 'upload' ? 'file' : raw;
+}
+
+function optionLabelMap(field: InputFieldSpec): Record<string, string> {
+  const labels = (field as { optionLabels?: unknown }).optionLabels;
+  return labels && typeof labels === 'object' && !Array.isArray(labels)
+    ? labels as Record<string, string>
+    : {};
 }
 
 function hasFieldValue(value: unknown): boolean {

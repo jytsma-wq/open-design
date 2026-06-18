@@ -29,6 +29,7 @@
  * The composed string is what the daemon sees as `systemPrompt` and what
  * the Anthropic path sends as `system`.
  */
+import type { ChatSessionMode } from '../api/chat.js';
 import type { ProjectMetadata, ProjectTemplate } from '../api/projects.js';
 import { OFFICIAL_DESIGNER_PROMPT } from './official-system.js';
 import { DISCOVERY_AND_PHILOSOPHY } from './discovery.js';
@@ -57,6 +58,38 @@ const PROMPT_SAFE_HTTP_STATUS_LABELS: Record<string, string> = {
   '503': 'Service Unavailable',
   '504': 'Gateway Timeout',
 };
+
+function renderUiLocalePrompt(locale: string | undefined): string {
+  const normalized = locale?.trim();
+  if (!normalized || normalized.toLowerCase() === 'en') return '';
+  const languageName = normalized === 'zh-CN'
+    ? 'Simplified Chinese'
+    : normalized === 'zh-TW'
+      ? 'Traditional Chinese'
+      : normalized;
+  const lines = [
+    '# UI locale override',
+    '',
+    `The Open Design UI locale for this run is \`${normalized}\` (${languageName}). All user-visible chat prose and generated UI controls must follow this locale, especially \`<question-form>\` titles, descriptions, labels, placeholders, helper text, and option labels. Keep machine-readable ids and object option \`value\` fields exact and unlocalized.`,
+    'Exception: for the default task-type form, keep the `taskType` option labels as the canonical routing choices: `Prototype`, `Live artifact`, `Slide deck`, `Image`, `Video`, `HyperFrames`, `Audio`, `Other`. Do not translate, reorder, or rewrite those option labels.',
+  ];
+  if (normalized === 'zh-CN') {
+    lines.push(
+      '',
+      'For the default quick brief in Simplified Chinese, use copy like:',
+      '- title: `快速简报 — 30 秒`',
+      '- description: `开始生成前我会先确认这些信息。不适用的可以跳过，我会补上默认值。`',
+      '- output label/options: `我们要做什么？` / `幻灯片 / 路演稿`, `单页网页原型 / 落地页`, `多屏应用原型`, `数据看板 / 工具界面`, `编辑式 / 营销页面`, `其他 — 我来描述`',
+      '- platform label/options: `目标平台` / `响应式网页`, `桌面网页`, `iOS 应用`, `Android 应用`, `平板应用`, `桌面应用`, `固定画布 (1920×1080)`',
+      '- audience label/placeholder: `目标用户` / `例如：早期投资人、开发者工具采购者、内部高管评审`',
+      '- tone label/options: `视觉调性` / `编辑 / 杂志感`, `现代极简`, `活泼 / 插画感`, `科技 / 工具型`, `奢华 / 精致`, `粗野 / 实验性`, `人性化 / 亲切`',
+      '- brand label/options: `品牌背景` / `帮我选一个方向`, `我有品牌规范 — 稍后分享`, `参考网站 / 截图 — 稍后附上`',
+      '- scale label/placeholder: `大概需要多少内容？` / `例如：8 页幻灯片、1 个落地页 + 3 个子页面、4 个移动端界面`',
+      '- constraints label/placeholder: `还有什么需要知道的吗？` / `真实文案、必须使用的字体、需要避免的内容、截止时间…`',
+    );
+  }
+  return lines.join('\n');
+}
 
 function normalizePromptText(value: string): string {
   return value
@@ -90,7 +123,36 @@ export function formatElevenLabsVoiceOptionsErrorForPrompt(
 
 export const SKIP_DISCOVERY_BRIEF_OVERRIDE = `# Automated project mode — skip discovery form
 
-This project was created through the daemon API with \`skipDiscoveryBrief: true\`. Override the discovery rules below: do NOT emit \`<question-form id="discovery">\`, do NOT show "Quick brief — 30 seconds", and do NOT ask a first-turn clarification form. Treat the user's first message and project metadata as the brief, then proceed directly to planning/building under the normal artifact workflow. Ask at most one concise follow-up only if a required detail is impossible to infer safely.`;
+This project was created through the daemon API with \`skipDiscoveryBrief: true\`. Override the discovery rules below: do NOT emit \`<question-form id="discovery">\`, do NOT show "Quick brief — 30 seconds", and do NOT ask a first-turn clarification form. Do not emit any question form or choice card, and do not wait for user input. Treat the user's first message and project metadata as the brief, choose reasonable defaults for any missing details, then proceed directly to planning/building under the normal artifact workflow.`;
+
+export function buildExamplePromptOverride(
+  title?: string | null,
+  brief?: Record<string, string> | null,
+): string {
+  let text = `# Example prompt mode — full-quality direct generation
+
+The user selected a curated example prompt from the gallery and sent it without modification. This prompt is a complete, self-contained creative brief that has been carefully designed to produce a showcase-quality artifact.`;
+
+  if (title) {
+    text += `\n\nSelected example: "${title}"`;
+  }
+
+  if (brief && Object.keys(brief).length > 0) {
+    text += `\n\nPre-filled creative brief (treat as if the user already answered all discovery questions):`;
+    for (const [key, value] of Object.entries(brief)) {
+      text += `\n- ${key.replace(/_/g, ' ')}: ${value}`;
+    }
+  }
+
+  text += `\n\nRules:
+1. Do NOT emit \`<question-form id="discovery">\`, do NOT show "Quick brief — 30 seconds", and do NOT ask any clarifying questions.
+2. Treat the user's message as the FULL specification — it contains all visual direction, content themes, and structural intent needed.
+3. Generate the artifact at your absolute highest quality. This is a showcase piece — match or exceed the standard of a hand-crafted design.
+4. Infer any unspecified details (copy, layout choices, imagery descriptions) in a way that is maximally coherent with the stated creative direction.
+5. Proceed directly to planning and building. Output your TodoWrite plan and then the artifact immediately.`;
+
+  return text;
+}
 
 const ACTIVE_DESIGN_SYSTEM_VISUAL_DIRECTION_OVERRIDE = `
 
@@ -159,6 +221,13 @@ export interface ComposeInput {
   // When set to 'plain', suppresses tool_calls so API/BYOK-mode models
   // only emit <artifact> blocks (they cannot execute tools).
   streamFormat?: string | undefined;
+  // Per-conversation mode. Design mode keeps the artifact-first agent
+  // workflow; chat mode keeps the same context/tools but answers like a
+  // standard multi-turn assistant unless the user explicitly asks to build.
+  sessionMode?: ChatSessionMode | undefined;
+  // UI locale selected by the client. User-visible generated form copy
+  // must follow this locale even when the user's initial prompt is brief.
+  locale?: string | undefined;
   // Free-form instructions the user set at the global (user-level)
   // settings panel. Injected after personal memory.
   userInstructions?: string | undefined;
@@ -181,6 +250,8 @@ export function composeSystemPrompt({
   audioVoiceOptions,
   audioVoiceOptionsError,
   streamFormat,
+  sessionMode,
+  locale,
   userInstructions,
   projectInstructions,
 }: ComposeInput): string {
@@ -190,6 +261,13 @@ export function composeSystemPrompt({
   // wording later in the official base prompt.
   const parts: string[] = [];
   const activeDesignSystemBody = designSystemBody?.trim();
+  const isMediaSurfaceEarly =
+    skillMode === 'image' ||
+    skillMode === 'video' ||
+    skillMode === 'audio' ||
+    metadata?.kind === 'image' ||
+    metadata?.kind === 'video' ||
+    metadata?.kind === 'audio';
 
   // API/BYOK mode (streamFormat === 'plain'): no tools are wired through
   // to the model, but the discovery layer + base prompt below still tell
@@ -204,15 +282,41 @@ export function composeSystemPrompt({
     parts.push('\n\n---\n\n');
   }
 
-  if (metadata?.skipDiscoveryBrief === true) {
+  if (sessionMode === 'chat') {
+    parts.push(CHAT_MODE_OVERRIDE);
+    parts.push('\n\n---\n\n');
+  }
+
+  if (metadata?.examplePrompt === true) {
+    parts.push(buildExamplePromptOverride(metadata.examplePromptTitle, metadata.examplePromptBrief));
+    parts.push('\n\n---\n\n');
+  } else if (metadata?.skipDiscoveryBrief === true) {
     parts.push(SKIP_DISCOVERY_BRIEF_OVERRIDE);
     parts.push('\n\n---\n\n');
   }
 
+  const localePrompt = renderUiLocalePrompt(locale);
+  if (localePrompt) {
+    parts.push(localePrompt);
+    parts.push('\n\n---\n\n');
+  }
+
+  if (!isMediaSurfaceEarly) {
+    parts.push(DISCOVERY_AND_PHILOSOPHY, '\n\n---\n\n');
+  }
+
+  parts.push('# Identity and workflow charter (background)\n\n', BASE_SYSTEM_PROMPT);
+
+  // Mid-conversation clarification reuses the same `<question-form>` flow as
+  // turn-1 discovery (DISCOVERY_AND_PHILOSOPHY) so the host keeps ONE unified
+  // questions surface: a chat banner, the form in the right-hand Questions
+  // tab, and answers returned as the next user message. Mirrors the
+  // daemon-side composer's "## Clarifying questions mid-conversation" section
+  // in apps/daemon/src/prompts/system.ts — keep both in sync so a daemon chat
+  // and a BYOK/API chat route follow-up choices through the same surface
+  // instead of drifting back to plain markdown option lists.
   parts.push(
-    DISCOVERY_AND_PHILOSOPHY,
-    '\n\n---\n\n# Identity and workflow charter (background)\n\n',
-    BASE_SYSTEM_PROMPT,
+    "\n\n---\n\n## Clarifying questions mid-conversation\n\nWhen you need a clarification AFTER turn 1 and the natural answer is one of a small finite set of choices (2-4 options per question), emit a `<question-form>` block — the same markup turn-1 discovery uses — instead of writing a bulleted list of options in markdown. The host renders it as a Questions banner the user opens in the side tab; a markdown list renders as plain text and forces the user to type a reply. Use free-form prose questions only when the answer is naturally open-ended, needs more than ~4 options, or is a single yes/no. Do NOT also duplicate the form's questions as markdown text alongside it.",
   );
 
   // Mirrors the daemon-side composer in apps/daemon/src/prompts/system.ts —
@@ -305,14 +409,7 @@ export function composeSystemPrompt({
     );
   }
 
-  const isMediaSurface =
-    skillMode === 'image' ||
-    skillMode === 'video' ||
-    skillMode === 'audio' ||
-    metadata?.kind === 'image' ||
-    metadata?.kind === 'video' ||
-    metadata?.kind === 'audio';
-  if (isMediaSurface) {
+  if (isMediaSurfaceEarly) {
     parts.push(MEDIA_GENERATION_CONTRACT);
   }
 
@@ -352,9 +449,17 @@ Every later instruction in this prompt that tells you to "call TodoWrite", "run 
 **Allowed output:**
 - Plain chat prose to the user (in their language). State your plan as prose — a short numbered list in markdown is fine; it just must not be wrapped in \`<todo-list>\` or claim to be a tool call.
 - A final \`<artifact type="text/html">...</artifact>\` block containing a complete \`<!doctype html>\` document when the brief is ready to deliver.
-- \`<question-form>\` blocks for discovery on turn 1, exactly as the rules below describe — question-form is markup the UI parses, not a tool call.
+- \`<question-form>\` blocks for discovery (turn 1) and for mid-conversation clarification, exactly as the rules below describe — question-form is markup the UI parses, not a tool call.
 
 If the rules below tell you to plan with TodoWrite, write the plan as prose instead. If they tell you to read skill side files before writing, describe in one sentence which patterns/conventions you're going to apply and proceed. If they tell you to run brand-spec extraction via Bash + Read + WebFetch, ask the user the missing brand questions in the discovery form instead.`;
+
+const CHAT_MODE_OVERRIDE = `# Chat mode — standard conversation (read first — overrides every rule below)
+
+This conversation is in Open Design Chat mode. Open Design is the open-source Claude Design alternative and a native Figma counterpart. Official links: GitHub https://github.com/nexu-io/open-design, website https://open-design.ai/, Discord https://discord.gg/9ptkbbqRu.
+
+Use the same available context, files, attachments, connectors, MCP servers, project memory, and model capabilities as Design mode. The difference is behavior: answer like a fast, direct, multi-turn desktop chat assistant. Prefer concise prose, explanations, comparisons, debugging help, and follow-up questions only when needed.
+
+Override artifact-first discovery rules below: do not emit a default discovery \`<question-form>\`, do not call TodoWrite just to plan a chat answer, and do not create or edit project files, HTML, PPT, slide decks, images, video, or audio unless the user explicitly asks you to generate/build/design/export/modify something. When the user does ask for a design artifact or file change, you may use the normal Open Design agent workflow and the same tools/capabilities available in Design mode.`;
 
 function renderMetadataBlock(
   metadata: ProjectMetadata | undefined,
@@ -433,6 +538,9 @@ function renderMetadataBlock(
     );
   }
   if (metadata.kind === 'deck') {
+    lines.push(
+      `- **slideCount**: ${metadata.slideCount ?? '(unknown — ask only if the Active plugin / Plugin inputs block does not already include slideCount)'}`,
+    );
     lines.push(
       `- **speakerNotes**: ${typeof metadata.speakerNotes === 'boolean' ? metadata.speakerNotes : '(unknown — ask: include speaker notes?)'}`,
     );

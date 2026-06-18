@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, open, type FileHandle } from "node:fs/promises";
+import { access, appendFile, mkdir, open, type FileHandle } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { delimiter, dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -23,6 +23,8 @@ import {
 } from "@open-design/sidecar";
 import {
   createProcessStampArgs,
+  mergeProxyAwareEnv,
+  resolveSystemProxyEnv,
   stopProcesses,
   waitForProcessExit,
   wellKnownUserToolchainBins,
@@ -39,10 +41,16 @@ const PACKAGED_CHILD_ENV_ALLOWLIST = [
   "LANG",
   "LC_ALL",
   "LOGNAME",
+  "ALL_PROXY",
+  "NODE_USE_ENV_PROXY",
   "NO_PROXY",
   "TMPDIR",
   "USER",
   "VP_HOME",
+  "all_proxy",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
 ] as const;
 
 function shouldForwardPackagedChildEnv(key: string, includeProviderSecrets = false): boolean {
@@ -65,11 +73,23 @@ type ManagedSidecarChild = {
   child: ChildProcess;
   ipcPath: string;
   logHandle: FileHandle;
+  logPath: string;
 };
 
 type PackagedDaemonManagedPathEnv = {
   OD_DATA_DIR: string;
   OD_RESOURCE_ROOT: string;
+  /**
+   * Channel-root path. Lives one level above the namespaces directory so
+   * the daemon can persist installationId (and any future fields that
+   * must outlive a namespace-scoped data-dir reset) outside the
+   * `<namespace>/data/` subtree.
+   *
+   * Required so PostHog person identity survives a reinstall of the same
+   * channel even when the baked namespace token changes or per-namespace
+   * data is cleared. See `apps/daemon/src/installation.ts`.
+   */
+  OD_INSTALLATION_DIR: string;
 };
 
 function resolveSidecarEntry(packageName: string, exportName: string): string {
@@ -78,6 +98,43 @@ function resolveSidecarEntry(packageName: string, exportName: string): string {
 
 function logPathFor(paths: PackagedNamespacePaths, app: AppKey): string {
   return join(paths.logsRoot, app, "latest.log");
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolvePackagedElectronNodeCommand(
+  execPath = process.execPath,
+  platform = process.platform,
+): Promise<string> {
+  if (platform !== "darwin") return execPath;
+
+  const executableName = execPath.split("/").pop();
+  if (executableName == null || executableName.length === 0) return execPath;
+
+  const marker = "/Contents/MacOS/";
+  const markerIndex = execPath.lastIndexOf(marker);
+  if (markerIndex === -1) return execPath;
+
+  const appPath = execPath.slice(0, markerIndex);
+  const helperName = `${executableName} Helper`;
+  const helperPath = join(
+    appPath,
+    "Contents",
+    "Frameworks",
+    `${helperName}.app`,
+    "Contents",
+    "MacOS",
+    helperName,
+  );
+
+  return (await pathExists(helperPath)) ? helperPath : execPath;
 }
 
 async function openLog(path: string): Promise<FileHandle> {
@@ -196,14 +253,18 @@ export function resolvePackagedPathEnv(basePath = process.env.PATH ?? ""): strin
 export function resolvePackagedChildBaseEnv(
   env: NodeJS.ProcessEnv = process.env,
   includeProviderSecrets = false,
+  systemProxyEnv: NodeJS.ProcessEnv = resolveSystemProxyEnv(),
+  includeSystemProxyEnv = true,
 ): NodeJS.ProcessEnv {
-  const baseEnv: NodeJS.ProcessEnv = {};
+  const forwardedEnv: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(env)) {
     if (value != null && value.length > 0 && shouldForwardPackagedChildEnv(key, includeProviderSecrets)) {
-      baseEnv[key] = value;
+      forwardedEnv[key] = value;
     }
   }
-  return baseEnv;
+  return includeSystemProxyEnv
+    ? mergeProxyAwareEnv(process.platform, systemProxyEnv, forwardedEnv)
+    : mergeProxyAwareEnv(process.platform, forwardedEnv);
 }
 
 function createPackagedDaemonManagedPathEnv(
@@ -212,11 +273,13 @@ function createPackagedDaemonManagedPathEnv(
   return {
     OD_DATA_DIR: paths.dataRoot,
     OD_RESOURCE_ROOT: paths.resourceRoot,
+    OD_INSTALLATION_DIR: paths.installationRoot,
   };
 }
 
 export type PackagedDaemonSpawnEnvOptions = {
   appVersion: string | null;
+  amrProfile?: string | null;
   daemonCliEntry: string | null;
   /**
    * PR #974 round-5 (lefarcen P2): only pin the daemon's import-folder
@@ -260,6 +323,9 @@ export function buildPackagedDaemonSpawnEnv(
     // fallback, but packaged runtime must not rely on path inference from
     // Electron userData, bundle names, or ports.
     ...createPackagedDaemonManagedPathEnv(paths),
+    ...(options.amrProfile == null || options.amrProfile.length === 0
+      ? {}
+      : { OPEN_DESIGN_AMR_PROFILE: options.amrProfile }),
     ...(options.appVersion == null ? {} : { OD_APP_VERSION: options.appVersion }),
     ...(options.telemetryRelayUrl == null || options.telemetryRelayUrl.length === 0
       ? {}
@@ -307,12 +373,18 @@ async function spawnSidecarChild(options: {
     namespace: options.runtime.namespace,
     source: options.runtime.source,
   } satisfies SidecarStamp;
-  const logHandle = await openLog(logPathFor(options.paths, options.app));
+  const logPath = logPathFor(options.paths, options.app);
+  const logHandle = await openLog(logPath);
   const childEnv = createSidecarLaunchEnv({
     base: options.paths.runtimeRoot,
     contract: OPEN_DESIGN_SIDECAR_CONTRACT,
     extraEnv: {
-      ...resolvePackagedChildBaseEnv(process.env, options.app === APP_KEYS.DAEMON),
+      ...resolvePackagedChildBaseEnv(
+        process.env,
+        options.app === APP_KEYS.DAEMON,
+        resolveSystemProxyEnv(),
+        options.app !== APP_KEYS.DAEMON,
+      ),
       ...options.env,
       NODE_ENV: "production",
       PATH: resolvePackagedPathEnv(),
@@ -320,7 +392,7 @@ async function spawnSidecarChild(options: {
     },
     stamp,
   });
-  const command = options.nodeCommand ?? process.execPath;
+  const command = options.nodeCommand ?? (await resolvePackagedElectronNodeCommand());
   const child = spawn(
     command,
     [options.entryPath, ...createProcessStampArgs(stamp, OPEN_DESIGN_SIDECAR_CONTRACT)],
@@ -337,10 +409,14 @@ async function spawnSidecarChild(options: {
     child.once("spawn", resolveSpawn);
   });
 
-  return { app: options.app, child, ipcPath, logHandle };
+  return { app: options.app, child, ipcPath, logHandle, logPath };
 }
 
 async function closeManagedChild(child: ManagedSidecarChild): Promise<void> {
+  const appendLifecycleLog = async (message: string): Promise<void> => {
+    await appendFile(child.logPath, `${message}\n`, "utf8").catch(() => undefined);
+  };
+  await appendLifecycleLog(`[open-design packaged] shutdown requested app=${child.app} pid=${child.child.pid ?? "unknown"}`);
   try {
     await requestJsonIpc(child.ipcPath, { type: SIDECAR_MESSAGES.SHUTDOWN }, { timeoutMs: 1200 });
   } catch {
@@ -348,9 +424,11 @@ async function closeManagedChild(child: ManagedSidecarChild): Promise<void> {
   }
 
   if (!(await waitForProcessExit(child.child.pid, 5000))) {
+    await appendLifecycleLog(`[open-design packaged] shutdown timeout app=${child.app} pid=${child.child.pid ?? "unknown"}; forcing stop`);
     await stopProcesses([child.child.pid]);
   }
 
+  await appendLifecycleLog(`[open-design packaged] exited app=${child.app} pid=${child.child.pid ?? "unknown"} code=${child.child.exitCode ?? "unknown"} signal=${child.child.signalCode ?? "none"}`);
   await child.logHandle.close().catch(() => undefined);
 }
 
@@ -359,6 +437,7 @@ export async function startPackagedSidecars(
   paths: PackagedNamespacePaths,
   options: {
     appVersion: string | null;
+    amrProfile: string | null;
     daemonCliEntry: string | null;
     daemonSidecarEntry: string | null;
     nodeCommand: string | null;
@@ -378,6 +457,15 @@ export async function startPackagedSidecars(
     webSidecarEntry: string | null;
     webStandaloneRoot: string | null;
     webOutputMode: PackagedWebOutputMode;
+    /**
+     * Boot-progress hook, fired at each sidecar bring-up boundary: the
+     * `"-spawning"` edge just before a child is spawned, and the `"-ready"`
+     * edge once it reports a usable URL. The Electron entry forwards these to
+     * the splash status line so a slow cold boot shows which phase is underway
+     * (and visibly advances the step counter the moment each long native wait
+     * clears) instead of a frozen frame; headless callers omit it.
+     */
+    onPhase?: (phase: "daemon-spawning" | "daemon-ready" | "web-spawning" | "web-ready") => void;
   },
 ): Promise<PackagedSidecarHandle> {
   await mkdir(paths.namespaceRoot, { recursive: true });
@@ -386,17 +474,20 @@ export async function startPackagedSidecars(
   await mkdir(paths.logsRoot, { recursive: true });
   await mkdir(paths.desktopLogsRoot, { recursive: true });
   await mkdir(paths.runtimeRoot, { recursive: true });
+  await mkdir(paths.updateRoot, { recursive: true });
   await mkdir(paths.electronUserDataRoot, { recursive: true });
   await mkdir(paths.electronSessionDataRoot, { recursive: true });
 
   const children: ManagedSidecarChild[] = [];
 
   try {
+    options.onPhase?.("daemon-spawning");
     const daemon = await spawnSidecarChild({
       app: APP_KEYS.DAEMON,
       entryPath: options.daemonSidecarEntry ?? resolveSidecarEntry("@open-design/daemon", "sidecar"),
       env: buildPackagedDaemonSpawnEnv(paths, {
         appVersion: options.appVersion,
+        amrProfile: options.amrProfile,
         daemonCliEntry: options.daemonCliEntry,
         legacyDataDir: process.env.OD_LEGACY_DATA_DIR ?? null,
         requireDesktopAuth: options.requireDesktopAuth,
@@ -421,7 +512,9 @@ export async function startPackagedSidecars(
       { child: daemon.child, logPath: logPathFor(paths, APP_KEYS.DAEMON) },
     );
     if (daemonStatus.url == null) throw new Error("daemon did not report a URL");
+    options.onPhase?.("daemon-ready");
 
+    options.onPhase?.("web-spawning");
     const web = await spawnSidecarChild({
       app: APP_KEYS.WEB,
       entryPath: options.webSidecarEntry ?? resolveSidecarEntry("@open-design/web", "sidecar"),
@@ -442,6 +535,7 @@ export async function startPackagedSidecars(
       (status) => status.url != null,
     );
     if (webStatus.url == null) throw new Error("web did not report a URL");
+    options.onPhase?.("web-ready");
 
     return {
       daemon: daemonStatus,

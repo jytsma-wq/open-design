@@ -1,9 +1,14 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import type { Writable } from 'node:stream';
 import path from 'node:path';
+import {
+  createDsmlArtifactTextSuppressor,
+  type ArtifactTextSuppressor,
+} from './artifact-text-suppression.js';
 
 const ACP_PROTOCOL_VERSION = 1;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const MAX_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 // Gap-between-chunks watchdog for an ACP session stage. The timer resets on
 // every line received from the agent, so this bounds *silent* periods, not
 // total runtime. Default kept in line with the outer chat-run inactivity
@@ -16,6 +21,13 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 // `OD_ACP_STAGE_TIMEOUT_MS=0` would call `setTimeout(..., 0)` and fail every
 // ACP session on the next tick instead of disabling the watchdog.
 const DEFAULT_STAGE_TIMEOUT_MS = 600_000;
+const ACP_ARTIFACT_OPEN_PATTERN = String.raw`<\s*(?:\|?\s*DSML[\s,]+artifact\b|artifact\b)`;
+const ACP_GENERATED_FILE_PREFIX_PATTERN =
+  String.raw`(?:here\s+is|here'?s)\s+the\s+generated\s+file\s*:?\s*(?:\r?\n|\s)*`;
+const ACP_ARTIFACT_ECHO_START_RE = new RegExp(
+  String.raw`^\s*(?:${ACP_ARTIFACT_OPEN_PATTERN}|${ACP_GENERATED_FILE_PREFIX_PATTERN}${ACP_ARTIFACT_OPEN_PATTERN})`,
+  'i',
+);
 
 type JsonRpcId = string | number;
 type JsonObject = Record<string, unknown>;
@@ -33,6 +45,10 @@ export interface AcpMcpServerInput {
 
 interface AcpSessionOptions {
   mcpServers?: AcpMcpServerInput[];
+  // How the `env` field of each mcpServer entry is shaped.
+  // `'array'` (default) → `[{name, value}]` (Hermes, Kimi, …).
+  // `'map'`   → `{"KEY": "val"}` (reasonix 1.x Go, standard MCP).
+  envFormat?: 'array' | 'map';
 }
 
 export interface ModelOption {
@@ -64,37 +80,73 @@ interface AttachAcpSessionOptions {
   prompt: string;
   cwd?: string;
   model?: string | null;
+  imagePaths?: string[];
   mcpServers?: AcpMcpServerInput[];
+  // Passed through to buildAcpSessionNewParams — see AcpSessionOptions.
+  envFormat?: 'array' | 'map';
   send: (event: string, payload: unknown) => void;
   clientName?: string;
   clientVersion?: string;
   stageTimeoutMs?: number;
+  modelUnavailableErrorCode?: 'AMR_MODEL_UNAVAILABLE';
 }
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function resolveAcpTimeoutMs(env: NodeJS.ProcessEnv, fallbackMs: number): number {
+  const raw = Number(env.OD_ACP_TIMEOUT_MS);
+  if (!Number.isFinite(raw)) return fallbackMs;
+  return Math.min(MAX_TIMEOUT_MS, Math.max(0, Math.floor(raw)));
+}
+
 function asObject(value: unknown): JsonObject | null {
   return value && typeof value === 'object' ? value as JsonObject : null;
 }
 
-export function buildAcpSessionNewParams(cwd: string, { mcpServers }: AcpSessionOptions = {}) {
+export function buildAcpSessionNewParams(cwd: string, { mcpServers, envFormat = 'array' }: AcpSessionOptions = {}) {
   const servers = Array.isArray(mcpServers) ? mcpServers : [];
+  const wantsMap = envFormat === 'map';
   return {
     cwd: path.resolve(cwd),
     // MCP is an optional compatibility layer. Default to no MCP servers so ACP
     // agents can run through the skill + CLI path without MCP support. Do not
     // auto-install or mutate user/global MCP config; callers must pass an
     // explicit per-session MCP descriptor when a compatible agent supports it.
-    // Normalize to the ACP stdio server shape expected by Kimi/Hermes.
-    mcpServers: servers.map((s) => ({
-      type: typeof s?.type === 'string' ? s.type : 'stdio',
-      name: typeof s?.name === 'string' ? s.name : '',
-      command: typeof s?.command === 'string' ? s.command : '',
-      args: Array.isArray(s?.args) ? s.args : [],
-      env: Array.isArray(s?.env) ? s.env : [],
-    })),
+    mcpServers: servers.map((s) => {
+      const rawEnv = s?.env;
+      // Already a plain object — pass through in map mode, convert to
+      // array in array mode (e.g. live-artifacts MCP from
+      // buildLiveArtifactsMcpServersForAgent which already respects
+      // acpMcpEnvFormat).
+      const isPlainObject =
+        rawEnv && typeof rawEnv === 'object' && !Array.isArray(rawEnv);
+      if (wantsMap && isPlainObject) {
+        return {
+          type: typeof s?.type === 'string' ? s.type : 'stdio',
+          name: typeof s?.name === 'string' ? s.name : '',
+          command: typeof s?.command === 'string' ? s.command : '',
+          args: Array.isArray(s?.args) ? s.args : [],
+          env: rawEnv,
+        };
+      }
+      const envArr = Array.isArray(rawEnv) ? rawEnv : [];
+      const env = wantsMap
+        ? Object.fromEntries(envArr.map((e: any) => [e?.name ?? '', e?.value ?? '']))
+        : isPlainObject
+          ? Object.entries(rawEnv as Record<string, string>).map(
+              ([name, value]) => ({ name, value }),
+            )
+          : envArr;
+      return {
+        type: typeof s?.type === 'string' ? s.type : 'stdio',
+        name: typeof s?.name === 'string' ? s.name : '',
+        command: typeof s?.command === 'string' ? s.command : '',
+        args: Array.isArray(s?.args) ? s.args : [],
+        env,
+      };
+    }),
   };
 }
 
@@ -106,6 +158,15 @@ function sendRpc(writable: RpcWritable, id: JsonRpcId, method: string, params: u
 
 function sendRpcResult(writable: RpcWritable, id: JsonRpcId, result: unknown): void {
   writable.write(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`);
+}
+
+function buildPromptBlocks(prompt: string, imagePaths: string[]): Array<Record<string, string>> {
+  const blocks: Array<Record<string, string>> = [{ type: 'text', text: prompt }];
+  for (const imagePath of imagePaths) {
+    if (typeof imagePath !== 'string' || imagePath.trim().length === 0) continue;
+    blocks.push({ type: 'resource_link', uri: imagePath });
+  }
+  return blocks;
 }
 
 function isJsonRpcId(value: unknown): value is JsonRpcId {
@@ -127,6 +188,44 @@ function rpcErrorMessage(raw: unknown): string {
   return typeof obj.id === 'number'
     ? `json-rpc id ${obj.id}: ${message}`
     : message;
+}
+
+function rpcErrorData(raw: unknown): unknown {
+  const obj = asObject(raw);
+  const error = asObject(obj?.error);
+  return error && 'data' in error ? error.data : undefined;
+}
+
+function rpcErrorRetryable(data: unknown): boolean | undefined {
+  const details = asObject(data);
+  return typeof details?.retryable === 'boolean' ? details.retryable : undefined;
+}
+
+function promotedOpenCodeSessionErrorPayload(data: unknown, fallbackMessage: string) {
+  const details = asObject(data);
+  if (
+    details?.kind !== 'opencode_session_error' ||
+    details.source !== 'opencode' ||
+    details.code !== 'ROLE_MARKER_HALLUCINATION'
+  ) {
+    return null;
+  }
+  const message =
+    typeof details.message === 'string' && details.message.trim()
+      ? details.message.trim()
+      : fallbackMessage;
+  return {
+    message,
+    error: {
+      code: 'ROLE_MARKER_HALLUCINATION',
+      message,
+      retryable: typeof details.retryable === 'boolean' ? details.retryable : true,
+      details: {
+        ...details,
+        promoted_by: 'open_design_acp',
+      },
+    },
+  };
 }
 
 interface FormattedUsage {
@@ -268,34 +367,305 @@ function currentModelFromSessionResult(result: JsonObject): string | null {
     : null;
 }
 
+function acpUpdateStatus(update: JsonObject): string {
+  return typeof update.status === 'string'
+    ? update.status.trim().toLowerCase().replace(/[\s_-]+/g, '')
+    : '';
+}
+
+function isAcpCompletedStatus(update: JsonObject): boolean {
+  const status = acpUpdateStatus(update);
+  return status === 'completed' || status === 'complete' || status === 'succeeded' || status === 'success';
+}
+
+function isAcpTerminalFailureStatus(update: JsonObject): boolean {
+  const status = acpUpdateStatus(update);
+  return status === 'failed' || status === 'failure' || status === 'error' || status === 'cancelled' || status === 'canceled';
+}
+
+function acpToolCallId(update: JsonObject): string | null {
+  return typeof update.toolCallId === 'string' && update.toolCallId.trim()
+    ? update.toolCallId.trim()
+    : null;
+}
+
+function isAcpArtifactWriteLabel(update: JsonObject): boolean {
+  const label = [
+    typeof update.title === 'string' ? update.title : '',
+    typeof update.name === 'string' ? update.name : '',
+  ].join(' ');
+  return /\b(?:edit|write|create|update|save|patch|replace)\b/i.test(label);
+}
+
+function isAcpArtifactWriteUpdate(update: JsonObject, writeToolCallIds: Set<string>): boolean {
+  if (!isAcpCompletedStatus(update)) return false;
+  const toolCallId = acpToolCallId(update);
+  return isAcpArtifactWriteLabel(update) || (toolCallId ? writeToolCallIds.has(toolCallId) : false);
+}
+
 export function createJsonLineStream(onMessage: (message: unknown, rawLine: string) => void) {
   let buffer = '';
+  let pendingJson = '';
+  let pendingJsonLineCount = 0;
+
+  const emit = (candidate: string): boolean => {
+    try {
+      onMessage(JSON.parse(candidate), candidate);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const startPendingJson = (line: string) => {
+    pendingJson = line;
+    pendingJsonLineCount = 1;
+  };
+
+  const resetPendingJson = () => {
+    pendingJson = '';
+    pendingJsonLineCount = 0;
+  };
+
+  const handleLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    if (pendingJson) {
+      const nextCandidate = `${pendingJson}\n${trimmed}`;
+      if (emit(nextCandidate)) {
+        resetPendingJson();
+        return;
+      }
+      pendingJsonLineCount += 1;
+      const state = classifyJsonCandidate(nextCandidate);
+      if (
+        state === 'incomplete' &&
+        nextCandidate.length <= 128_000 &&
+        pendingJsonLineCount <= 256
+      ) {
+        pendingJson = nextCandidate;
+        return;
+      }
+      resetPendingJson();
+      handleLine(trimmed);
+      return;
+    }
+    if (emit(trimmed)) return;
+    // ACP is line-delimited JSON-RPC, but a few bridges have emitted
+    // pretty-printed JSON during startup. Keep a bounded aggregate so an
+    // otherwise valid multiline initialize response does not get discarded
+    // line-by-line and leave the session stuck in spawn pending.
+    if (
+      (trimmed.startsWith('{') || trimmed.startsWith('[')) &&
+      classifyJsonCandidate(trimmed) === 'incomplete'
+    ) {
+      startPendingJson(trimmed);
+    }
+  };
+
   return {
     feed(chunk: string) {
       buffer += chunk;
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
       for (const line of lines) {
-        const trimmed = line.trim();
-        if (!trimmed) continue;
-        try {
-          onMessage(JSON.parse(trimmed), trimmed);
-        } catch {
-          // Ignore non-JSON log lines on stdout.
-        }
+        handleLine(line);
       }
     },
     flush() {
       const trimmed = buffer.trim();
       buffer = '';
-      if (!trimmed) return;
-      try {
-        onMessage(JSON.parse(trimmed), trimmed);
-      } catch {
-        // Ignore trailing non-JSON log lines on stdout.
+      if (trimmed) {
+        handleLine(trimmed);
       }
+      if (pendingJson && emit(pendingJson)) {
+        pendingJson = '';
+      }
+      // Ignore trailing non-JSON log lines on stdout.
     },
   };
+}
+
+function classifyJsonCandidate(value: string): 'complete' | 'incomplete' | 'invalid' {
+  type Frame =
+    | { kind: 'object'; expect: 'keyOrEnd' | 'colon' | 'value' | 'commaOrEnd' }
+    | { kind: 'array'; expect: 'valueOrEnd' | 'commaOrEnd' };
+  const stack: Frame[] = [];
+  let rootComplete = false;
+
+  const afterValue = () => {
+    const parent = stack.at(-1);
+    if (!parent) {
+      rootComplete = true;
+      return;
+    }
+    parent.expect = 'commaOrEnd';
+  };
+
+  const closeFrame = (kind: 'object' | 'array'): boolean => {
+    const current = stack.pop();
+    if (!current || current.kind !== kind) return false;
+    afterValue();
+    return true;
+  };
+
+  const parseString = (start: number): number | null => {
+    for (let index = start + 1; index < value.length; index += 1) {
+      const char = value[index];
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === '"') return index;
+    }
+    return null;
+  };
+
+  const parseLiteral = (start: number, literal: string): number | null | false => {
+    for (let offset = 0; offset < literal.length; offset += 1) {
+      const char = value[start + offset];
+      if (char === undefined) return null;
+      if (char !== literal[offset]) return false;
+    }
+    return start + literal.length - 1;
+  };
+
+  const parseNumber = (start: number): number | false => {
+    let index = start;
+    if (value[index] === '-') index += 1;
+    if (value[index] === '0') {
+      index += 1;
+    } else if (/[1-9]/.test(value[index] ?? '')) {
+      while (/[0-9]/.test(value[index] ?? '')) index += 1;
+    } else {
+      return false;
+    }
+    if (value[index] === '.') {
+      index += 1;
+      if (!/[0-9]/.test(value[index] ?? '')) return false;
+      while (/[0-9]/.test(value[index] ?? '')) index += 1;
+    }
+    if (value[index] === 'e' || value[index] === 'E') {
+      index += 1;
+      if (value[index] === '+' || value[index] === '-') index += 1;
+      if (!/[0-9]/.test(value[index] ?? '')) return false;
+      while (/[0-9]/.test(value[index] ?? '')) index += 1;
+    }
+    return index - 1;
+  };
+
+  const parseValue = (index: number): number | null | false => {
+    const char = value[index];
+    if (char === '"') {
+      const end = parseString(index);
+      if (end === null) return null;
+      afterValue();
+      return end;
+    }
+    if (char === '{') {
+      stack.push({ kind: 'object', expect: 'keyOrEnd' });
+      return index;
+    }
+    if (char === '[') {
+      stack.push({ kind: 'array', expect: 'valueOrEnd' });
+      return index;
+    }
+    if (char === 't') {
+      const end = parseLiteral(index, 'true');
+      if (end === false || end === null) return end;
+      afterValue();
+      return end;
+    }
+    if (char === 'f') {
+      const end = parseLiteral(index, 'false');
+      if (end === false || end === null) return end;
+      afterValue();
+      return end;
+    }
+    if (char === 'n') {
+      const end = parseLiteral(index, 'null');
+      if (end === false || end === null) return end;
+      afterValue();
+      return end;
+    }
+    if (char === '-' || /[0-9]/.test(char ?? '')) {
+      const end = parseNumber(index);
+      if (end === false) return false;
+      afterValue();
+      return end;
+    }
+    return false;
+  };
+
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index];
+    if (char === undefined) break;
+    if (/\s/.test(char)) continue;
+
+    const current = stack.at(-1);
+    if (!current) {
+      if (rootComplete) return 'invalid';
+      const end = parseValue(index);
+      if (end === false) return 'invalid';
+      if (end === null) return 'incomplete';
+      index = end;
+      continue;
+    }
+
+    if (current.kind === 'object') {
+      if (current.expect === 'keyOrEnd') {
+        if (char === '}') {
+          if (!closeFrame('object')) return 'invalid';
+          continue;
+        }
+        if (char !== '"') return 'invalid';
+        const end = parseString(index);
+        if (end === null) return 'incomplete';
+        current.expect = 'colon';
+        index = end;
+        continue;
+      }
+      if (current.expect === 'colon') {
+        if (char !== ':') return 'invalid';
+        current.expect = 'value';
+        continue;
+      }
+      if (current.expect === 'value') {
+        const end = parseValue(index);
+        if (end === false) return 'invalid';
+        if (end === null) return 'incomplete';
+        index = end;
+        continue;
+      }
+      if (char === '}') {
+        if (!closeFrame('object')) return 'invalid';
+        continue;
+      }
+      if (char !== ',') return 'invalid';
+      current.expect = 'keyOrEnd';
+      continue;
+    }
+
+    if (current.expect === 'valueOrEnd') {
+      if (char === ']') {
+        if (!closeFrame('array')) return 'invalid';
+        continue;
+      }
+      const end = parseValue(index);
+      if (end === false) return 'invalid';
+      if (end === null) return 'incomplete';
+      index = end;
+      continue;
+    }
+    if (char === ']') {
+      if (!closeFrame('array')) return 'invalid';
+      continue;
+    }
+    if (char !== ',') return 'invalid';
+    current.expect = 'valueOrEnd';
+  }
+
+  return rootComplete && stack.length === 0 ? 'complete' : 'incomplete';
 }
 
 export async function detectAcpModels({
@@ -308,6 +678,7 @@ export async function detectAcpModels({
   clientVersion = 'runtime-adapter',
   defaultModelOption = { id: 'default', label: 'Default (CLI config)' },
 }: DetectAcpModelsOptions): Promise<ModelOption[]> {
+  const effectiveTimeoutMs = resolveAcpTimeoutMs(env, timeoutMs);
   return await new Promise<ModelOption[]>((resolve, reject) => {
     const child = spawn(bin, args, {
       cwd,
@@ -322,11 +693,11 @@ export async function detectAcpModels({
     let expectedId = 1;
     let nextId = 2;
 
-    let timer: TimerHandle;
+    let timer: TimerHandle | null = null;
     const finish = <T extends ModelOption[] | Error>(fn: (value: T) => void, value: T) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       try {
         child.stdin.end();
       } catch {}
@@ -394,9 +765,11 @@ export async function detectAcpModels({
       }
     });
 
-    timer = setTimeout(() => {
-      fail(`ACP model detection timed out after ${timeoutMs}ms`);
-    }, timeoutMs);
+    if (effectiveTimeoutMs > 0) {
+      timer = setTimeout(() => {
+        fail(`ACP model detection timed out after ${effectiveTimeoutMs}ms`);
+      }, effectiveTimeoutMs);
+    }
 
     writeRpc(1, 'initialize', {
       protocolVersion: ACP_PROTOCOL_VERSION,
@@ -411,11 +784,14 @@ export function attachAcpSession({
   prompt,
   cwd,
   model,
+  imagePaths = [],
   mcpServers,
+  envFormat = 'array',
   send,
   clientName = 'open-design',
   clientVersion = 'runtime-adapter',
   stageTimeoutMs = DEFAULT_STAGE_TIMEOUT_MS,
+  modelUnavailableErrorCode,
 }: AttachAcpSessionOptions) {
   const runStartedAt = Date.now();
   const effectiveCwd = path.resolve(cwd || process.cwd());
@@ -433,10 +809,19 @@ export function attachAcpSession({
   let modelConfigId: string | null = null;
   let emittedThinkingStart = false;
   let emittedFirstTokenStatus = false;
+  let emittedTextChunk = false;
+  let emittedVisibleTextChunk = false;
+  let emittedToolCall = false;
+  let emittedTextBuffer = '';
   let finished = false;
   let fatal = false;
   let aborted = false;
   let stageTimer: TimerHandle | null = null;
+  let dsmlArtifactSuppressor: ArtifactTextSuppressor | null = null;
+  let dsmlArtifactSuppressorToolCallId: string | null = null;
+  let dsmlArtifactSuppressorArmedAfterText = false;
+  let dsmlArtifactSuppressorSawIncrementalProse = false;
+  const acpArtifactWriteToolCallIds = new Set<string>();
 
   const stageWatchdogDisabled = stageTimeoutMs <= 0;
   const resetStageTimer = (label: string) => {
@@ -457,12 +842,62 @@ export function attachAcpSession({
     stageTimer = null;
   };
 
-  const fail = (message: string) => {
+  const amrModelUnavailablePayload = (message: string) => ({
+    message,
+    error: {
+      code: 'AMR_MODEL_UNAVAILABLE',
+      message,
+      retryable: false,
+      details: { kind: 'amr_model', action: 'choose_model' },
+    },
+  });
+
+  const isModelUnavailableError = (message: string) => {
+    const value = message.toLowerCase();
+    return (
+      value.includes('model not found') ||
+      value.includes('providermodelnotfounderror') ||
+      value.includes('unknown model') ||
+      value.includes('invalid model')
+    );
+  };
+
+  const failWithPayload = (payload: unknown) => {
     if (finished) return;
     finished = true;
     fatal = true;
     clearStageTimer();
-    send('error', { message });
+    send('error', payload);
+    if (!child.killed) child.kill('SIGTERM');
+  };
+
+  const fail = (
+    message: string,
+    options: { forceModelUnavailable?: boolean; details?: unknown; retryable?: boolean } = {},
+  ) => {
+    if (finished) return;
+    finished = true;
+    fatal = true;
+    clearStageTimer();
+    const useModelUnavailable =
+      modelUnavailableErrorCode &&
+      (options.forceModelUnavailable || isModelUnavailableError(message));
+    send(
+      'error',
+      useModelUnavailable
+        ? amrModelUnavailablePayload(message)
+        : options.details === undefined && options.retryable === undefined
+          ? { message }
+          : {
+              message,
+              error: {
+                code: 'AGENT_EXECUTION_FAILED',
+                message,
+                retryable: options.retryable ?? false,
+                ...(options.details === undefined ? {} : { details: options.details }),
+              },
+            },
+    );
     if (!child.killed) child.kill('SIGTERM');
   };
 
@@ -483,11 +918,43 @@ export function attachAcpSession({
       'session/prompt',
       {
         sessionId,
-        prompt: [{ type: 'text', text: prompt }],
+        prompt: buildPromptBlocks(prompt, imagePaths),
       },
       'session/prompt',
     );
+    send('agent', {
+      type: 'status',
+      label: 'waiting_for_first_output',
+      elapsedMs: Date.now() - runStartedAt,
+    });
     nextId += 1;
+  };
+
+  const finishCleanPrompt = (usageSource?: unknown) => {
+    if (finished) return;
+    const flushedText = dsmlArtifactSuppressor?.flush() ?? '';
+    if (flushedText) {
+      emittedVisibleTextChunk = true;
+      send('agent', { type: 'text_delta', delta: flushedText });
+    }
+    const usage = formatUsage(usageSource);
+    if (usage) {
+      send('agent', {
+        type: 'usage',
+        usage,
+        durationMs: Date.now() - runStartedAt,
+      });
+    }
+    finished = true;
+    clearStageTimer();
+    stdin.end();
+    // Some ACP agents keep the child process alive after stdin closes,
+    // waiting for another prompt. Each Open Design run owns one process per
+    // turn, so close it once this prompt is cleanly complete.
+    const cleanExitTimer = setTimeout(() => {
+      if (!child.killed) child.kill('SIGTERM');
+    }, 500);
+    child.once('close', () => clearTimeout(cleanExitTimer));
   };
 
   const replyPermission = (raw: JsonObject) => {
@@ -515,7 +982,7 @@ export function attachAcpSession({
   };
 
   const parser = createJsonLineStream((raw, rawLine) => {
-    if (aborted) return;
+    if (aborted || finished) return;
     resetStageTimer('response');
     const obj = asObject(raw);
     if (!obj) return;
@@ -542,7 +1009,17 @@ export function attachAcpSession({
       if (error?.code === -32603 && obj.id !== expectedId) {
         return;
       }
-      fail(rpcErr);
+      const details = rpcErrorData(obj);
+      const promotedPayload = promotedOpenCodeSessionErrorPayload(details, rpcErr);
+      if (promotedPayload) {
+        failWithPayload(promotedPayload);
+        return;
+      }
+      const retryable = rpcErrorRetryable(details);
+      fail(rpcErr, {
+        details,
+        ...(retryable === undefined ? {} : { retryable }),
+      });
       return;
     }
     if (obj.method === 'session/request_permission') {
@@ -551,6 +1028,13 @@ export function attachAcpSession({
     }
     const update = asObject(params?.update);
     if (obj.method === 'session/update' && update) {
+      if (update.sessionUpdate !== 'agent_message_chunk' && update.sessionUpdate !== 'agent_thought_chunk') {
+        send('agent', {
+          type: 'status',
+          label: String(update.sessionUpdate || 'session_update'),
+          elapsedMs: Date.now() - runStartedAt,
+        });
+      }
       if (update.sessionUpdate === 'agent_thought_chunk') {
         const text = asObject(update.content)?.text;
         if (typeof text === 'string' && text.length > 0) {
@@ -565,15 +1049,96 @@ export function attachAcpSession({
       if (update.sessionUpdate === 'agent_message_chunk') {
         const text = asObject(update.content)?.text;
         if (typeof text === 'string' && text.length > 0) {
-          if (!emittedFirstTokenStatus) {
-            emittedFirstTokenStatus = true;
-            send('agent', {
-              type: 'status',
-              label: 'streaming',
-              ttftMs: Date.now() - runStartedAt,
-            });
+          const isCumulativeSnapshot = text.startsWith(emittedTextBuffer);
+          const delta = isCumulativeSnapshot
+            ? text.slice(emittedTextBuffer.length)
+            : text;
+          if (delta.length > 0) {
+            emittedTextChunk = true;
+            emittedTextBuffer += delta;
+            if (!emittedFirstTokenStatus) {
+              emittedFirstTokenStatus = true;
+              send('agent', {
+                type: 'status',
+                label: 'streaming',
+                ttftMs: Date.now() - runStartedAt,
+              });
+            }
+            if (dsmlArtifactSuppressor) {
+              const wasSuppressingArtifact = dsmlArtifactSuppressor.isSuppressing();
+              const hadPendingArtifactCandidate = dsmlArtifactSuppressor.hasPendingCandidate();
+              const strippedDelta = dsmlArtifactSuppressor.strip(delta);
+              const hasOpenArtifactCandidate =
+                dsmlArtifactSuppressor.isSuppressing() || dsmlArtifactSuppressor.hasPendingCandidate();
+              const consumedArtifactText = wasSuppressingArtifact || strippedDelta !== delta;
+              const shouldPreserveIncrementalProse =
+                !isCumulativeSnapshot &&
+                !wasSuppressingArtifact &&
+                !hadPendingArtifactCandidate &&
+                !hasOpenArtifactCandidate &&
+                (
+                  strippedDelta === delta ||
+                  (
+                    !dsmlArtifactSuppressorArmedAfterText &&
+                    dsmlArtifactSuppressorSawIncrementalProse &&
+                    !ACP_ARTIFACT_ECHO_START_RE.test(delta)
+                  )
+                );
+              const outputDelta = shouldPreserveIncrementalProse ? delta : strippedDelta;
+              if (outputDelta) {
+                emittedVisibleTextChunk = true;
+                send('agent', { type: 'text_delta', delta: outputDelta });
+              }
+              if (
+                strippedDelta === delta &&
+                !wasSuppressingArtifact &&
+                !hadPendingArtifactCandidate &&
+                !hasOpenArtifactCandidate
+              ) {
+                dsmlArtifactSuppressorSawIncrementalProse = true;
+              }
+              if (consumedArtifactText && !hasOpenArtifactCandidate) {
+                dsmlArtifactSuppressor = null;
+                dsmlArtifactSuppressorToolCallId = null;
+                dsmlArtifactSuppressorArmedAfterText = false;
+                dsmlArtifactSuppressorSawIncrementalProse = false;
+              }
+            } else {
+              emittedVisibleTextChunk = true;
+              send('agent', { type: 'text_delta', delta });
+            }
           }
-          send('agent', { type: 'text_delta', delta: text });
+        }
+        return;
+      }
+      if (
+        update.sessionUpdate === 'tool_call' ||
+        update.sessionUpdate === 'tool_call_update'
+      ) {
+        // The turn did real work (a tool call / file edit), which is valid output even
+        // when the model emits no closing assistant text. Track it so the prompt-complete
+        // handler does not misreport such a turn as "no output / model unavailable".
+        emittedToolCall = true;
+        const toolCallId = acpToolCallId(update);
+        if (toolCallId && isAcpArtifactWriteLabel(update)) {
+          acpArtifactWriteToolCallIds.add(toolCallId);
+        }
+        if (isAcpArtifactWriteUpdate(update, acpArtifactWriteToolCallIds)) {
+          dsmlArtifactSuppressor = createDsmlArtifactTextSuppressor();
+          dsmlArtifactSuppressorToolCallId = toolCallId;
+          dsmlArtifactSuppressorArmedAfterText = emittedTextBuffer.length > 0;
+          dsmlArtifactSuppressorSawIncrementalProse = false;
+          if (toolCallId) acpArtifactWriteToolCallIds.delete(toolCallId);
+        } else if (toolCallId && isAcpTerminalFailureStatus(update)) {
+          const ownsPendingWriteSuppression = toolCallId === dsmlArtifactSuppressorToolCallId;
+          const ownsPendingWriteCall = acpArtifactWriteToolCallIds.has(toolCallId);
+          acpArtifactWriteToolCallIds.delete(toolCallId);
+          if (ownsPendingWriteSuppression || ownsPendingWriteCall) {
+            dsmlArtifactSuppressor = null;
+            dsmlArtifactSuppressorToolCallId = null;
+            dsmlArtifactSuppressorArmedAfterText = false;
+            dsmlArtifactSuppressorSawIncrementalProse = false;
+          }
         }
         return;
       }
@@ -589,7 +1154,7 @@ export function attachAcpSession({
         'session/new',
         buildAcpSessionNewParams(
           effectiveCwd,
-          mcpServers ? { mcpServers } : {},
+          mcpServers ? { mcpServers, envFormat } : { envFormat },
         ),
         'session/new',
       );
@@ -628,30 +1193,14 @@ export function attachAcpSession({
       return;
     }
     if (promptRequestId !== null && obj.id === promptRequestId) {
-      const usage = formatUsage(result.usage);
-      if (usage) {
-        send('agent', {
-          type: 'usage',
-          usage,
-          durationMs: Date.now() - runStartedAt,
-        });
+      if (!emittedTextChunk && !emittedToolCall && modelUnavailableErrorCode) {
+        fail(
+          'ACP session completed without producing any assistant text. Refresh the AMR model list, choose a supported model, and retry this run.',
+          { forceModelUnavailable: true },
+        );
+        return;
       }
-      finished = true;
-      clearStageTimer();
-      stdin.end();
-      // Some ACP agents (e.g. Devin for Terminal) keep the child process
-      // alive after stdin closes, waiting for the next prompt. Each Open
-      // Design run spawns its own agent process per turn, so the child must
-      // terminate for `child.on('close')` to fire and the chat run to
-      // finalize — otherwise the chat stays stuck in the "working" state.
-      // Give the child a short grace period to exit on its own first; if it
-      // doesn't, SIGTERM forces it. This mirrors the pattern in
-      // detectAcpModels() which already kills the child after a clean
-      // model-discovery probe completes (see line ~270 in this file).
-      const cleanExitTimer = setTimeout(() => {
-        if (!child.killed) child.kill('SIGTERM');
-      }, 500);
-      child.once('close', () => clearTimeout(cleanExitTimer));
+      finishCleanPrompt(result.usage);
       return;
     }
     if (sessionId && model && model !== 'default' && obj.id === expectedId) {
@@ -662,9 +1211,12 @@ export function attachAcpSession({
   });
 
   stdout.on('data', (chunk: string) => parser.feed(chunk));
-  child.on('close', () => {
+  child.on('close', (code, signal) => {
     clearStageTimer();
     parser.flush();
+    if (!finished && !aborted && !fatal) {
+      fail(`ACP session exited before completion (code=${code ?? 'null'}, signal=${signal ?? 'none'})`);
+    }
   });
   child.on('error', (err: Error) => fail(err.message));
   stdin.on('error', (err: Error) => fail(`stdin error: ${err.message}`));
@@ -691,12 +1243,27 @@ export function attachAcpSession({
       aborted = true;
       finished = true;
       clearStageTimer();
-      if (!sessionId || !child.stdin || child.stdin.destroyed || child.stdin.writableEnded) return;
+      if (!child.stdin || child.stdin.destroyed || child.stdin.writableEnded)
+        return;
+      // Only cancel an established session; before session/new resolves there
+      // is no sessionId to cancel, but we must still close stdin below.
+      if (sessionId) {
+        try {
+          sendRpc(child.stdin, nextId, 'session/cancel', { sessionId });
+          nextId += 1;
+        } catch {
+          // The caller owns process-signal fallback if the ACP transport is gone.
+        }
+      }
+      // Always close stdin so the agent receives EOF and shuts down its own
+      // runtime — the vela ACP bridge tears down its private OpenCode server on
+      // EOF — instead of lingering (and leaking that server) until the caller's
+      // SIGTERM fallback fires. This also covers aborts during ACP startup,
+      // before session/new returns. Mirrors the clean-completion path above.
       try {
-        sendRpc(child.stdin, nextId, 'session/cancel', { sessionId });
-        nextId += 1;
+        child.stdin.end();
       } catch {
-        // The caller owns process-signal fallback if the ACP transport is gone.
+        // Best effort; the caller still owns the SIGTERM/SIGKILL fallback.
       }
     },
   };

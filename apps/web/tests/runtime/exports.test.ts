@@ -1,15 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { installMockOpenDesignHost } from '@open-design/host/testing';
 import {
   archiveFilenameFrom,
   archiveRootFromFilePath,
   buildDesignHandoffContent,
   buildDesignManifestContent,
+  downloadImageDataUrl,
   buildSandboxedPreviewDocument,
   exportAsImage,
   exportAsMd,
   exportAsPdf,
+  exportProjectAsHtml,
   exportProjectAsPdf,
   openSandboxedPreviewInNewTab,
+  prepareImageExportTarget,
   requestPreviewSnapshot,
 } from '../../src/runtime/exports';
 
@@ -216,6 +220,22 @@ describe('exportProjectAsPdf', () => {
     });
   });
 
+  it('treats a canceled desktop PDF save dialog as a silent no-op', async () => {
+    const fallback = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, canceled: true }), { status: 200 })));
+
+    const result = await exportProjectAsPdf({
+      deck: true,
+      fallbackPdf: fallback,
+      filePath: 'deck/index.html',
+      projectId: 'proj-1',
+      title: 'Seed Deck',
+    });
+
+    expect(result).toBe('cancelled');
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
   it('falls back to browser print when the desktop PDF export API is unavailable', async () => {
     const fallback = vi.fn();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -231,6 +251,76 @@ describe('exportProjectAsPdf', () => {
 
     expect(result).toBe('fallback');
     expect(fallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('exportProjectAsHtml', () => {
+  let capturedBlob: Blob | undefined;
+  let capturedFilename: string | undefined;
+
+  beforeEach(() => {
+    capturedBlob = undefined;
+    capturedFilename = undefined;
+    vi.stubGlobal('URL', {
+      createObjectURL: (blob: Blob) => {
+        capturedBlob = blob;
+        return 'blob:test';
+      },
+      revokeObjectURL: () => {},
+    });
+    vi.stubGlobal('document', {
+      createElement: () => {
+        const anchor = { href: '', click: () => {} } as { href: string; download?: string; click: () => void };
+        Object.defineProperty(anchor, 'download', {
+          set(value: string) {
+            capturedFilename = value;
+          },
+          get() {
+            return capturedFilename ?? '';
+          },
+        });
+        return anchor;
+      },
+      body: { appendChild: () => {}, removeChild: () => {} },
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it('downloads daemon-inlined project HTML instead of the raw source body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<!doctype html><p>inlined</p>', {
+      headers: { 'content-type': 'text/html' },
+      status: 200,
+    })));
+
+    await exportProjectAsHtml({
+      projectId: 'proj 1',
+      filePath: 'screens/main page.html',
+      fallbackHtml: '<script type="module" src="/src/main.tsx"></script>',
+      fallbackTitle: 'Main Page',
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/api/projects/proj%201/export/screens/main%20page.html?inline=1');
+    expect(capturedFilename).toBe('Main-Page.html');
+    expect(await capturedBlob!.text()).toBe('<!doctype html><p>inlined</p>');
+  });
+
+  it('falls back to the source HTML export when the daemon inline endpoint fails', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500 })));
+
+    await exportProjectAsHtml({
+      projectId: 'proj-1',
+      filePath: 'index.html',
+      fallbackHtml: '<main>fallback</main>',
+      fallbackTitle: 'Fallback',
+    });
+
+    expect(capturedFilename).toBe('Fallback.html');
+    expect(await capturedBlob!.text()).toContain('<main>fallback</main>');
   });
 });
 
@@ -323,6 +413,10 @@ describe('sandboxed preview Blob exports', () => {
       revokeObjectURL: vi.fn(),
     });
     vi.stubGlobal('window', {
+      location: {
+        href: 'https://open-design.test/plugins/example',
+        origin: 'https://open-design.test',
+      },
       open: (_url: string, _target: string, features?: string) => {
         openCalls.push([_url, _target]);
         openedFeatures = features;
@@ -347,6 +441,14 @@ describe('sandboxed preview Blob exports', () => {
     expect(wrapper).not.toContain('allow-same-origin');
     expect(wrapper).toContain('&lt;script&gt;window.parent.localStorage.clear()&lt;/script&gt;');
     expect(wrapper).not.toContain('<script>window.parent.localStorage.clear()</script>');
+  });
+
+  it('anchors new-tab srcdoc previews to the current origin when no explicit base is provided', async () => {
+    openSandboxedPreviewInNewTab('<img src="/api/plugins/example/assets/hero.png"><img src="assets/card.png">', 'Plugin preview');
+
+    expect(capturedBlob).toBeDefined();
+    const wrapper = await capturedBlob!.text();
+    expect(wrapper).toContain('&lt;base href=&quot;https://open-design.test/&quot;&gt;');
   });
 
   it('passes srcdoc options through the sandboxed new-tab wrapper', async () => {
@@ -401,6 +503,24 @@ describe('sandboxed preview Blob exports', () => {
     expect(wrapper).toContain('page-break-after: always;');
   });
 
+  it('waits for the injected print-ready cache before calling window.print() in the browser fallback', async () => {
+    await exportAsPdf('<div><img src="https://example.com/slow.png" alt="slow"/></div>', 'Ready PDF');
+
+    expect(capturedBlob).toBeDefined();
+    const wrapper = await capturedBlob!.text();
+    expect(wrapper).toContain('__odPrintReady');
+    expect(wrapper).toContain('__odPrintReadyStarted');
+    expect(wrapper).toContain("window.__odPrintReady===true");
+    expect(wrapper).toContain("window.__odPrintReadyStarted===false");
+    expect(wrapper).toContain("e.data.type==='OD_PRINT_READY'");
+    expect(wrapper).toContain("e.data.type==='OD_PRINT_READY_STARTED'");
+    expect(wrapper).toContain('window.addEventListener(\'message\'');
+    expect(wrapper).toContain('document.fonts');
+    expect(wrapper).toContain('waitForCssBackgroundImages');
+    expect(wrapper).toContain("setTimeout(doPrint,300)");
+    expect(wrapper).toContain('window.print()');
+  });
+
   it('allows explicit trusted PDF opt-out without changing the secure default', async () => {
     await exportAsPdf('<main>Trusted local document</main>', 'Trusted PDF', {
       sandboxedPreview: false,
@@ -413,6 +533,8 @@ describe('sandboxed preview Blob exports', () => {
     const doc = await capturedBlob!.text();
     expect(doc).not.toContain('sandbox="allow-scripts allow-modals"');
     expect(doc).toContain('<main>Trusted local document</main>');
+    expect(doc).toContain('__odPrintReady');
+    expect(doc).toContain("window.__odPrintReady===true");
   });
 
   it('shows an alert and revokes the blob URL when the popup is blocked', async () => {
@@ -430,19 +552,17 @@ describe('sandboxed preview Blob exports', () => {
     expect(revokeSpy).toHaveBeenCalledWith('blob:test');
   });
 
-  it('uses the desktop native print bridge when __odDesktop.printPdf is available', async () => {
-    const printPdfMock = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('window', {
-      open: (_url: string, _target: string, features?: string) => {
-        openCalls.push([_url, _target]);
-        openedFeatures = features;
-        return mockWin;
-      },
-      addEventListener: () => {},
-      __odDesktop: { printPdf: printPdfMock, isDesktop: true },
+  it('uses the desktop native print bridge when the host PDF bridge is available', async () => {
+    const printPdfMock = vi.fn().mockResolvedValue({ ok: true });
+    const restoreHost = installMockOpenDesignHost({
+      host: { pdf: { print: printPdfMock } },
     });
 
-    await exportAsPdf('<script>window.parent.document.body.innerHTML="owned"</script>', 'Desktop PDF');
+    try {
+      await exportAsPdf('<script>window.parent.document.body.innerHTML="owned"</script>', 'Desktop PDF');
+    } finally {
+      restoreHost();
+    }
 
     expect(printPdfMock).toHaveBeenCalledTimes(1);
     expect(openCalls).toEqual([]);
@@ -458,32 +578,60 @@ describe('sandboxed preview Blob exports', () => {
     // Verify the parent-wrapper cache script is present so the handshake is
     // never missed even if 'OD_PRINT_READY' fires before the listener attaches.
     expect(htmlArg).toContain('__odPrintReady');
-    // Verify the print script is NOT injected — Electron calls
-    // webContents.print() natively, so a self-printing document would
-    // trigger a second print dialog.
+    // Verify the print script is NOT injected — Electron renders via the
+    // native printToPDF path, so a self-printing document would trigger a
+    // second print dialog.
     expect(htmlArg).not.toContain('window.print()');
   });
 
+  it('passes deck intent through the desktop native print bridge', async () => {
+    const printPdfMock = vi.fn().mockResolvedValue({ ok: true });
+    const restoreHost = installMockOpenDesignHost({
+      host: { pdf: { print: printPdfMock } },
+    });
+
+    try {
+      await exportAsPdf('<section class="slide">One</section>', 'Desktop Deck', { deck: true });
+    } finally {
+      restoreHost();
+    }
+
+    expect(printPdfMock).toHaveBeenCalledTimes(1);
+    expect(printPdfMock.mock.calls[0]![2]).toEqual({ deck: true });
+    expect(printPdfMock.mock.calls[0]![0]).toContain('data-deck-print=&quot;injected&quot;');
+  });
+
   it('injects image-waiting logic into the print-ready handshake for the desktop bridge', async () => {
-    const printPdfMock = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('window', {
-      open: () => mockWin,
-      addEventListener: () => {},
-      __odDesktop: { printPdf: printPdfMock, isDesktop: true },
+    const printPdfMock = vi.fn().mockResolvedValue({ ok: true });
+    const restoreHost = installMockOpenDesignHost({
+      host: { pdf: { print: printPdfMock } },
     });
 
     // HTML with an intentionally non-loadable image to exercise the
     // incomplete-image detection in the injected handshake.
     const html = '<div><img src="https://example.com/will-not-load.png" alt="test"/></div>';
-    await exportAsPdf(html, 'Image Test');
+    try {
+      await exportAsPdf(html, 'Image Test');
+    } finally {
+      restoreHost();
+    }
 
     const htmlArg = printPdfMock.mock.calls[0]![0];
     // In the sandboxed wrapper the srcdoc attribute is HTML-escaped, so the
     // handshake script content is present as unescaped JS fragments.
     expect(htmlArg).toContain('document.images');
+    expect(htmlArg).toContain("img.loading==='lazy'");
+    expect(htmlArg).toContain("img.loading='eager'");
     expect(htmlArg).toContain("img.addEventListener('load'");
     expect(htmlArg).toContain("img.addEventListener('error'");
     expect(htmlArg).toContain('img.complete');
+    expect(htmlArg).toContain('waitForCssBackgroundImages');
+    expect(htmlArg).toContain('window.getComputedStyle');
+    expect(htmlArg).toContain('style.backgroundImage');
+    expect(htmlArg).toContain('style.borderImageSource');
+    expect(htmlArg).toContain('style.listStyleImage');
+    expect(htmlArg).toContain('new Image()');
+    expect(htmlArg).toContain('requestAnimationFrame');
     // The original font- and load-waiting logic must still be present.
     expect(htmlArg).toContain('document.fonts');
     expect(htmlArg).toContain('OD_PRINT_READY');
@@ -501,17 +649,52 @@ describe('sandboxed preview Blob exports', () => {
     expect(htmlArg).not.toContain('window.print()');
   });
 
-  it('injects the readiness cache for non-sandboxed desktop exports too', async () => {
-    const printPdfMock = vi.fn().mockResolvedValue(undefined);
-    vi.stubGlobal('window', {
-      open: () => mockWin,
-      addEventListener: () => {},
-      __odDesktop: { printPdf: printPdfMock, isDesktop: true },
+  it('reports the artifact content size through the handshake so the desktop page is sized to the content, not the wrapper viewport (issue #4067)', async () => {
+    const printPdfMock = vi.fn().mockResolvedValue({ ok: true });
+    const restoreHost = installMockOpenDesignHost({
+      host: { pdf: { print: printPdfMock } },
     });
 
-    await exportAsPdf('<main>Trusted local document</main>', 'Trusted', {
-      sandboxedPreview: false,
+    try {
+      await exportAsPdf('<div style="height:4000px">tall artifact</div>', 'Tall PDF');
+    } finally {
+      restoreHost();
+    }
+
+    const htmlArg = printPdfMock.mock.calls[0]![0];
+    // The in-iframe handshake measures the artifact's own document dimensions.
+    // The parent wrapper cannot do this itself: the sandboxed preview iframe is
+    // `allow-scripts` with no `allow-same-origin`, so iframe.contentDocument is
+    // null. Measuring from inside is the only way to learn the real size.
+    expect(htmlArg).toContain('document.documentElement');
+    expect(htmlArg).toContain('scrollHeight');
+    expect(htmlArg).toContain('offsetHeight');
+    // ...and it ships the size alongside the readiness signal.
+    expect(htmlArg).toContain('width:w');
+    expect(htmlArg).toContain('height:h');
+    // The parent wrapper caches the reported size for inferPageSize() to read,
+    // validating it as a positive finite number so a malformed/oversized message
+    // cannot poison the page size. The finite check matters: `Infinity > 0` is
+    // true, so a bare `typeof === 'number'` guard would cache a non-finite
+    // dimension and let it leak into the page size.
+    expect(htmlArg).toContain('window.__odPrintSize');
+    expect(htmlArg).toContain('Number.isFinite(e.data.width)');
+    expect(htmlArg).toContain('Number.isFinite(e.data.height)');
+  });
+
+  it('injects the readiness cache for non-sandboxed desktop exports too', async () => {
+    const printPdfMock = vi.fn().mockResolvedValue({ ok: true });
+    const restoreHost = installMockOpenDesignHost({
+      host: { pdf: { print: printPdfMock } },
     });
+
+    try {
+      await exportAsPdf('<main>Trusted local document</main>', 'Trusted', {
+        sandboxedPreview: false,
+      });
+    } finally {
+      restoreHost();
+    }
 
     expect(printPdfMock).toHaveBeenCalledTimes(1);
     const htmlArg = printPdfMock.mock.calls[0]![0];
@@ -652,12 +835,14 @@ describe('requestPreviewSnapshot', () => {
 
 describe('exportAsImage', () => {
   let clickMock: ReturnType<typeof vi.fn>;
+  let createObjectURLMock: ReturnType<typeof vi.fn>;
   let anchors: Array<{ href: string; download: string; click: ReturnType<typeof vi.fn> }>;
 
   beforeEach(() => {
     clickMock = vi.fn();
+    createObjectURLMock = vi.fn(() => 'blob:mock-url');
     anchors = [];
-    vi.stubGlobal('URL', { createObjectURL: () => 'blob:mock-url', revokeObjectURL: vi.fn() });
+    vi.stubGlobal('URL', { createObjectURL: createObjectURLMock, revokeObjectURL: vi.fn() });
     vi.stubGlobal('document', {
       createElement: () => {
         const el = { href: '', download: '', click: clickMock };
@@ -691,5 +876,73 @@ describe('exportAsImage', () => {
     exportAsImage('data:image/png;base64,AA==', 'Hello <World> / Test!');
 
     expect(anchors[0]!.download).toBe('Hello-World-Test.png');
+  });
+
+  it('does not download an empty image snapshot', () => {
+    expect(() => exportAsImage('data:image/png;base64,', 'Empty')).toThrow('Image snapshot is empty');
+
+    expect(clickMock).not.toHaveBeenCalled();
+    expect(anchors).toHaveLength(0);
+  });
+
+  it('downloads a validated image data URL without creating a blob URL', () => {
+    const dataUrl = 'data:image/png;base64,AA==';
+
+    downloadImageDataUrl(dataUrl, 'workspace.png');
+
+    expect(clickMock).toHaveBeenCalledOnce();
+    expect(createObjectURLMock).not.toHaveBeenCalled();
+    expect(anchors[0]!.href).toBe(dataUrl);
+    expect(anchors[0]!.download).toBe('workspace.png');
+  });
+
+  it('does not download an empty image data URL', () => {
+    expect(() => downloadImageDataUrl('data:image/png;base64,', 'workspace.png')).toThrow('Image snapshot is empty');
+
+    expect(clickMock).not.toHaveBeenCalled();
+    expect(anchors).toHaveLength(0);
+  });
+
+  it('falls back to download when the native save picker is blocked', async () => {
+    const showSaveFilePicker = vi.fn().mockRejectedValue(
+      new DOMException('Must be handling a user gesture to show a file picker.', 'SecurityError'),
+    );
+    vi.stubGlobal('window', { showSaveFilePicker });
+
+    const target = await prepareImageExportTarget('My Design', 'jpeg');
+
+    expect(showSaveFilePicker).toHaveBeenCalledOnce();
+    expect(target?.method).toBe('download');
+    expect(target?.filename).toBe('My-Design.jpg');
+
+    await target?.save(new Blob(['jpeg'], { type: 'image/jpeg' }));
+
+    expect(clickMock).toHaveBeenCalledOnce();
+    expect(anchors[0]!.download).toBe('My-Design.jpg');
+  });
+
+  it('falls back to download when the native save picker reports a cross-realm SecurityError', async () => {
+    const securityError = Object.assign(new Error('Must be handling a user gesture to show a file picker.'), {
+      name: 'SecurityError',
+    });
+    const showSaveFilePicker = vi.fn().mockRejectedValue(securityError);
+    vi.stubGlobal('window', { showSaveFilePicker });
+
+    const target = await prepareImageExportTarget('My Design', 'webp');
+
+    expect(showSaveFilePicker).toHaveBeenCalledOnce();
+    expect(target?.method).toBe('download');
+    expect(target?.filename).toBe('My-Design.webp');
+  });
+
+  it('can skip the native save picker to avoid pre-creating empty files', async () => {
+    const showSaveFilePicker = vi.fn();
+    vi.stubGlobal('window', { showSaveFilePicker });
+
+    const target = await prepareImageExportTarget('My Design', 'png', { useNativePicker: false });
+
+    expect(showSaveFilePicker).not.toHaveBeenCalled();
+    expect(target?.method).toBe('download');
+    expect(target?.filename).toBe('My-Design.png');
   });
 });

@@ -1,6 +1,6 @@
 import { test } from 'vitest';
 import {
-  assert, checkPromptArgvBudget, checkWindowsCmdShimCommandLineBudget, checkWindowsDirectExeCommandLineBudget, claude, deepseek, deepseekMaxPromptArgBytes, vibe,
+  assert, checkPromptArgvBudget, checkWindowsCmdShimCommandLineBudget, checkWindowsDirectExeCommandLineBudget, claude, deepseek, deepseekMaxPromptArgBytes, grokBuild, kimi, vibe,
 } from './helpers/test-helpers.js';
 import type { TestAgentDef } from './helpers/test-helpers.js';
 
@@ -74,7 +74,7 @@ test('checkPromptArgvBudget flags oversized DeepSeek prompts and lets short prom
   assert.equal(flagged.bytes, deepseekMaxPromptArgBytes + 1);
   assert.match(flagged.message, /DeepSeek/);
   assert.match(flagged.message, /command-line argument/);
-  assert.match(flagged.message, /stdin support/);
+  assert.match(flagged.message, /stdin-capable adapter/);
 
   // Normal-sized prompts must not trip the guard; the chat happy path
   // depends on this returning null so it can proceed to spawn.
@@ -94,6 +94,39 @@ test('checkPromptArgvBudget flags oversized DeepSeek prompts and lets short prom
   const cjkFlagged = checkPromptArgvBudget(deepseek, cjkOversized);
   assert.ok(cjkFlagged, 'byte-counted UTF-8 prompts must also trip the guard');
   assert.equal(cjkFlagged.code, 'AGENT_PROMPT_TOO_LARGE');
+});
+
+test('checkPromptArgvBudget gives DeepSeek-specific guidance for large contexts', () => {
+  const oversized = 'x'.repeat(deepseekMaxPromptArgBytes + 1);
+  const flagged = checkPromptArgvBudget(deepseek, oversized);
+
+  assert.ok(flagged, 'oversized DeepSeek prompts must return a diagnostic');
+  assert.match(flagged.message, /DeepSeek TUI/);
+  assert.match(flagged.message, /currently accepts prompts only as a command-line argument/);
+  assert.match(flagged.message, /API\/provider model connection/);
+  assert.match(flagged.message, /stdin-capable adapter/);
+});
+
+test('Kimi prompt mode declares and enforces an argv-byte budget', () => {
+  assert.equal(kimi.maxPromptArgBytes, 30_000);
+
+  const oversized = 'x'.repeat(kimi.maxPromptArgBytes + 1);
+  const flagged = checkPromptArgvBudget(kimi, oversized);
+  assert.ok(flagged, 'oversized Kimi prompts must trip the argv-byte guard');
+  assert.equal(flagged.code, 'AGENT_PROMPT_TOO_LARGE');
+  assert.equal(flagged.limit, kimi.maxPromptArgBytes);
+  assert.equal(flagged.bytes, kimi.maxPromptArgBytes + 1);
+  assert.match(flagged.message, /Kimi CLI/);
+  assert.match(flagged.message, /command-line argument/);
+  assert.match(flagged.message, /stdin support/);
+
+  assert.equal(checkPromptArgvBudget(kimi, 'hello'), null);
+});
+
+test('checkPromptArgvBudget is a no-op for Grok Build because it uses prompt files', () => {
+  assert.equal(grokBuild.promptViaFile, true);
+  assert.equal(grokBuild.maxPromptArgBytes, undefined);
+  assert.equal(checkPromptArgvBudget(grokBuild, 'x'.repeat(100_000)), null);
 });
 
 // Adapters that ship the prompt over stdin (every other code agent
@@ -415,19 +448,16 @@ test('cmd-shim and direct-exe guards are mutually exclusive on a single resoluti
   assert.ok(checkWindowsDirectExeCommandLineBudget(deepseek, exePath, args));
 });
 
-test('deepseek entry does not advertise deepseek-tui as a fallback bin', () => {
-  // `deepseek` is the dispatcher that owns `exec` / `--auto`; `deepseek-tui`
-  // is the runtime companion the dispatcher invokes. Upstream installs both
-  // together (npm and cargo). A `deepseek-tui`-only host is not a supported
-  // install, and `deepseek-tui` itself doesn't accept `exec --auto <prompt>`
-  // — surfacing it via fallbackBins would advertise availability but make
-  // the first /api/chat run fail. Pin the absence so the fallback can't
-  // drift back without an accompanying buildArgs branch + test.
-  assert.equal(
-    Array.isArray((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins)
-      && ((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins?.length ?? 0) > 0,
-    false,
-    `deepseek must not declare fallbackBins until the deepseek-tui-only invocation is implemented and tested; got ${JSON.stringify((deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins)}`,
+test('deepseek entry declares codewhale as a fallback bin but not deepseek-tui (issue #2983)', () => {
+  const fallbackBins = (deepseek as TestAgentDef & { fallbackBins?: string[] }).fallbackBins;
+  assert.ok(Array.isArray(fallbackBins), 'deepseek.fallbackBins must be an array');
+  assert.ok(
+    fallbackBins.includes('codewhale'),
+    `deepseek.fallbackBins must include 'codewhale'; got ${JSON.stringify(fallbackBins)}`,
+  );
+  assert.ok(
+    !fallbackBins.includes('deepseek-tui'),
+    'deepseek-tui is the runtime companion and must not be advertised as a dispatcher fallback',
   );
 });
 

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { composeSystemPrompt } from '../../src/prompts/system.js';
+import { composeSystemPrompt, resolveExclusiveSurface } from '../../src/prompts/system.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -38,7 +38,12 @@ const hyperframesSkillPath = path.join(
   repoRoot,
   'design-templates/hyperframes/SKILL.md',
 );
+const officialHyperframesSkillPath = path.join(
+  repoRoot,
+  'plugins/_official/examples/hyperframes/SKILL.md',
+);
 const hyperframesSkillMarkdown = readFileSync(hyperframesSkillPath, 'utf8');
+const officialHyperframesSkillMarkdown = readFileSync(officialHyperframesSkillPath, 'utf8');
 const hyperframesSkillBody = [
   `> **Skill root (absolute):** \`${hyperframesRoot}\``,
   '>',
@@ -81,6 +86,79 @@ describe('composeSystemPrompt — activeStageBlocks splice (spec §23.4)', () =>
 });
 
 describe('composeSystemPrompt', () => {
+  it('injects Chinese quick brief guidance when the UI locale is zh-CN', () => {
+    const prompt = composeSystemPrompt({ locale: 'zh-CN' });
+
+    expect(prompt).toContain('# UI locale override');
+    expect(prompt).toContain('`zh-CN` (Simplified Chinese)');
+    expect(prompt).toContain('快速简报 — 30 秒');
+    expect(prompt).toContain('目标用户');
+    expect(prompt).toContain('视觉调性');
+    expect(prompt).toContain('Keep machine-readable ids and object option `value` fields exact and unlocalized');
+  });
+
+  it('injects the converged verification policy (no mid-build screenshot looping)', () => {
+    const prompt = composeSystemPrompt({});
+
+    // Verification must read as an end-of-turn, single-pass step.
+    expect(prompt).toContain('## Verification — converge at the end, in one pass');
+    // The hard cap on rendered visual checks — the lever against codex's
+    // self-initiated 6-12x screenshot retry chains that balloon input tokens.
+    expect(prompt).toContain('One render check is the budget');
+    expect(prompt).toContain('Do not loop');
+    // Safety valve: visual verification is converged, NOT removed.
+    expect(prompt).toContain('these justify ONE rendered look');
+    // Route to the official wrapper, not a self-launched browser.
+    expect(prompt).toContain('Do NOT launch your own browser to do this');
+  });
+
+  it('preserves canonical default task-type options under locale overrides', () => {
+    const prompt = composeSystemPrompt({ locale: 'zh-CN' });
+
+    expect(prompt).toContain(
+      'keep the `taskType` option labels as the canonical routing choices',
+    );
+    for (const option of [
+      'Prototype',
+      'Live artifact',
+      'Slide deck',
+      'Image',
+      'Video',
+      'HyperFrames',
+      'Audio',
+      'Other',
+    ]) {
+      expect(prompt).toContain(`"${option}"`);
+    }
+    expect(prompt).not.toContain('option labels as `原型`');
+    expect(prompt).not.toContain('`实时作品`');
+  });
+
+  it('preserves canonical default task-type options for zh-TW locale overrides', () => {
+    const prompt = composeSystemPrompt({ locale: 'zh-TW' });
+
+    expect(prompt).toContain('# UI locale override');
+    expect(prompt).toContain('`zh-TW` (Traditional Chinese)');
+    expect(prompt).toContain(
+      'keep the `taskType` option labels as the canonical routing choices',
+    );
+    for (const option of [
+      'Prototype',
+      'Live artifact',
+      'Slide deck',
+      'Image',
+      'Video',
+      'HyperFrames',
+      'Audio',
+      'Other',
+    ]) {
+      expect(prompt).toContain(`"${option}"`);
+    }
+    expect(prompt).not.toContain('快速简报 — 30 秒');
+    expect(prompt).not.toContain('option labels as `原型`');
+    expect(prompt).not.toContain('`实时作品`');
+  });
+
   it('treats an active design system as the visual direction', () => {
     const prompt = composeSystemPrompt({
       designSystemTitle: 'ComfyUI',
@@ -103,6 +181,26 @@ describe('composeSystemPrompt', () => {
     expect(prompt.indexOf('## Active design system visual direction')).toBeGreaterThan(
       prompt.indexOf('### direction-picker'),
     );
+  });
+
+  it('uses stable brand option values for discovery-form branching', () => {
+    const prompt = composeSystemPrompt({});
+    expect(prompt).toContain('{ "label": "Pick a direction for me", "value": "pick_direction" }');
+    expect(prompt).toContain('{ "label": "I have a brand spec — I\'ll share it", "value": "brand_spec" }');
+    expect(prompt).toContain('{ "label": "Match a reference site / screenshot — I\'ll attach it", "value": "reference_match" }');
+    expect(prompt).toContain('When the answer line includes `[value: ...]`, use that stable value instead of the visible label.');
+    expect(prompt).toContain('If you keep the `brand` question, its `id` must stay `"brand"`.');
+    expect(prompt).toContain('you may drop the `brand` question as already answered, but you must still treat that provided source as Branch A below');
+    expect(prompt).toContain('When skipping the form, do not skip brand-source handling');
+    expect(prompt).toContain('If the current message, attachments, prior brief, or URL already contains an actual brand spec / brand guide / reference site / screenshot source, use Branch A.');
+    expect(prompt).toContain('### Branch A — user provided a brand/reference source, or `brand` value is `"brand_spec"` / `"reference_match"`');
+    expect(prompt).toContain('ask them to paste/upload the brand spec or reference and stop');
+    expect(prompt).toContain('Do not guess a brand domain or invent tokens');
+    expect(prompt).toContain('An active design system does not suppress Branch A when the user provides a brand/reference source');
+    expect(prompt).toContain('### Branch B — no user-provided brand/reference source and no Branch A brand value');
+    expect(prompt).toContain('active-design-system cases where the user did not provide a new brand/reference source');
+    expect(prompt).toContain('Provided brand/reference source → run brand-spec extraction');
+    expect(prompt).toContain('`brand_spec` / `reference_match` without a provided source → ask for the source and stop; do not guess brand tokens.');
   });
 
   it('injects live-artifact skill guidance and metadata intent', () => {
@@ -153,6 +251,21 @@ describe('composeSystemPrompt', () => {
     expect(prompt).toContain('## Active skill — hyperframes');
     expect(prompt).toContain('**Pre-flight (do this before any other tool):**');
     expect(prompt).toContain('`references/html-in-canvas.md`');
+    expect(prompt).toContain('media generate --surface video --model hyperframes-html --composition-dir <rel>');
+    expect(prompt).toContain('Do not run `npx hyperframes render` yourself');
+    expect(prompt).not.toContain('intentionally rejected for this model');
+    expect(prompt).not.toContain('AGENT_RENDERED');
+    expect(prompt).not.toContain('rendered by you directly via npx');
+  });
+
+  it('keeps both hyperframes skill copies aligned with the daemon render handoff', () => {
+    for (const markdown of [hyperframesSkillMarkdown, officialHyperframesSkillMarkdown]) {
+      expect(markdown).toContain('media generate --surface video --model hyperframes-html --composition-dir <rel>');
+      expect(markdown).toContain('Do not run `npx hyperframes render`');
+      expect(markdown).not.toContain('AGENT_RENDERED');
+      expect(markdown).not.toContain('rendered by you directly via npx');
+      expect(markdown).not.toContain('dispatcher path returns a 400');
+    }
   });
 
   it('does not add the responsive web contract to deck metadata without platform fields', () => {
@@ -160,12 +273,51 @@ describe('composeSystemPrompt', () => {
       metadata: {
         kind: 'deck',
         speakerNotes: true,
+        slideCount: '10-15 pages',
       } as any,
     });
 
     expect(prompt).toContain('- **kind**: deck');
+    expect(prompt).toContain('- **slideCount**: 10-15 pages');
     expect(prompt).not.toContain('**responsive web contract**');
     expect(prompt).not.toContain('**platformTargets**');
+  });
+
+  it('tells artifact generation to summarize instead of dumping raw HTML source into chat', () => {
+    const prompt = composeSystemPrompt({
+      metadata: { kind: 'prototype', fidelity: 'production' } as any,
+    });
+
+    expect(prompt).toContain('Do not dump the full raw HTML source back into chat');
+    expect(prompt).toContain('the assistant message should only summarize the result');
+  });
+
+  it('uses the primary skill surface when composed skill modes conflict', () => {
+    const prompt = composeSystemPrompt({
+      skillMode: 'image',
+      skillModes: ['deck', 'image'],
+    });
+
+    expect(prompt).toContain('## Media generation contract');
+    expect(prompt).not.toContain('# Slide deck — fixed framework');
+  });
+
+  it('lets metadata.kind win over conflicting composed skill modes', () => {
+    const prompt = composeSystemPrompt({
+      skillMode: 'image',
+      skillModes: ['deck', 'image'],
+      metadata: { kind: 'deck' } as any,
+    });
+
+    expect(prompt).toContain('# Slide deck — fixed framework');
+    expect(prompt).not.toContain('## Media generation contract');
+  });
+
+  it('resolves a non-media primary surface ahead of composed media mentions', () => {
+    expect(resolveExclusiveSurface({
+      skillMode: 'deck',
+      skillModes: ['deck', 'image'],
+    })).toBe('deck');
   });
 
   describe('artifact handoff no-emit clauses (#1143)', () => {
@@ -272,6 +424,19 @@ describe('composeSystemPrompt', () => {
       expect(prompt).toContain('- `github`\n');
       expect(prompt).not.toContain('- `github` (github)');
     });
+
+    it('keeps external MCP tools visible when OD-owned media execution is disabled', () => {
+      const prompt = composeSystemPrompt({
+        connectedExternalMcp: [{ id: 'external-media', label: 'External media' }],
+        metadata: { kind: 'image' },
+        mediaExecution: { mode: 'disabled' },
+      });
+
+      expect(prompt).toContain('## External MCP servers — already authenticated');
+      expect(prompt).toContain('`external-media`');
+      expect(prompt).toContain('Open Design-owned media execution is **disabled for this run**');
+      expect(prompt).not.toContain('## Media generation contract');
+    });
   });
 
   // The daemon experiment for compiling a brand's design system from prose
@@ -285,6 +450,8 @@ describe('composeSystemPrompt', () => {
   describe('design-system token + fixture injection (#PR-C)', () => {
     const sampleTokensCss = ':root {\n  --bg: #ffffff;\n  --fg: #111111;\n  --accent: #0050d8;\n}';
     const sampleFixtureHtml = '<!doctype html>\n<html lang="en">\n  <body><button class="btn btn-primary">Subscribe</button></body>\n</html>';
+    const sampleComponentsManifest =
+      'components.manifest schema v1 for default\nAvailable component groups:\n- Buttons and calls to action: selectors .btn, .btn-primary; tokens --accent';
 
     it('appends BOTH a tokens block and a fixture block when both inputs are present', () => {
       const prompt = composeSystemPrompt({
@@ -303,6 +470,47 @@ describe('composeSystemPrompt', () => {
       expect(prompt).toContain('class="btn btn-primary"');
     });
 
+    it('places USAGE.md before DESIGN.md so it acts as the package router', () => {
+      const prompt = composeSystemPrompt({
+        designSystemTitle: 'default',
+        designSystemBody: 'PROSE_BODY_MARKER',
+        designSystemUsageMd: 'Read Order: inspect the manifest cache before source evidence.',
+      });
+
+      const usageAt = prompt.indexOf('## How to use this design system — default');
+      const proseAt = prompt.indexOf('## Active design system — default');
+      expect(usageAt).toBeGreaterThan(0);
+      expect(proseAt).toBeGreaterThan(usageAt);
+      expect(prompt).toContain('Read Order: inspect the manifest cache before source evidence.');
+    });
+
+    it('injects a small default usage router for legacy brands with no USAGE.md', () => {
+      const prompt = composeSystemPrompt({
+        designSystemTitle: 'legacy',
+        designSystemBody: '# Legacy\n\nProse description.',
+      });
+
+      expect(prompt).toContain('## How to use this design system — legacy');
+      expect(prompt).toContain('Read DESIGN.md for visual principles');
+      expect(prompt).toContain('do not assume those files have already been loaded');
+    });
+
+    it('prefers the component manifest over the full fixture when both are present', () => {
+      const prompt = composeSystemPrompt({
+        designSystemTitle: 'default',
+        designSystemBody: '# Neutral Modern\n\n> Category: Utility\n\nProse description.',
+        designSystemTokensCss: sampleTokensCss,
+        designSystemComponentsManifest: sampleComponentsManifest,
+        designSystemFixtureHtml: sampleFixtureHtml,
+      });
+
+      expect(prompt).toContain('## Reference component manifest — default');
+      expect(prompt).toContain('components.manifest schema v1 for default');
+      expect(prompt).toContain('Buttons and calls to action');
+      expect(prompt).not.toContain('## Reference fixture — default');
+      expect(prompt).not.toContain('class="btn btn-primary"');
+    });
+
     it('keeps the prompt byte-equivalent to the legacy path when both inputs are omitted', () => {
       const baseline = composeSystemPrompt({
         designSystemTitle: 'default',
@@ -312,11 +520,13 @@ describe('composeSystemPrompt', () => {
         designSystemTitle: 'default',
         designSystemBody: '# Neutral Modern\n\nProse only.',
         designSystemTokensCss: undefined,
+        designSystemComponentsManifest: undefined,
         designSystemFixtureHtml: undefined,
       });
 
       expect(withFlagOffEquivalent).toBe(baseline);
       expect(withFlagOffEquivalent).not.toContain('## Active design system tokens');
+      expect(withFlagOffEquivalent).not.toContain('## Reference component manifest');
       expect(withFlagOffEquivalent).not.toContain('## Reference fixture');
     });
 
@@ -336,18 +546,53 @@ describe('composeSystemPrompt', () => {
       });
       expect(fixtureOnly).not.toContain('## Active design system tokens');
       expect(fixtureOnly).toContain('## Reference fixture — default');
+
+      const manifestOnly = composeSystemPrompt({
+        designSystemTitle: 'default',
+        designSystemBody: '# x\n\nbody',
+        designSystemComponentsManifest: sampleComponentsManifest,
+      });
+      expect(manifestOnly).not.toContain('## Active design system tokens');
+      expect(manifestOnly).toContain('## Reference component manifest — default');
     });
 
-    it('places the tokens + fixture blocks AFTER the DESIGN.md prose block (prose sets voice, structured form binds names)', () => {
+    it('adds the pull-layer index without loading pull-layer file contents', () => {
+      const prompt = composeSystemPrompt({
+        designSystemTitle: 'default',
+        designSystemBody: '# x\n\nbody',
+        designSystemPullIndex:
+          'Additional design-system files declared by manifest.json:\n- preview/colors.html: Colors; colors\n- source/evidence.md: import evidence notes',
+      });
+
+      expect(prompt).toContain('## Pull-layer files available on demand — default');
+      expect(prompt).toContain('preview/colors.html: Colors; colors');
+      expect(prompt).toContain('source/evidence.md: import evidence notes');
+      expect(prompt).toContain('Keep the push prompt light');
+    });
+
+    it('adds importMode guidance when the manifest declares consumption semantics', () => {
+      const prompt = composeSystemPrompt({
+        designSystemTitle: 'source-heavy',
+        designSystemBody: '# x\n\nbody',
+        designSystemImportMode: 'verbatim',
+      });
+
+      expect(prompt).toContain('## Design system import mode — source-heavy');
+      expect(prompt).toContain('Preserve source semantics and source naming');
+      expect(prompt).toContain('pull-layer source evidence or snippets');
+    });
+
+    it('places the tokens + component manifest blocks AFTER the DESIGN.md prose block (prose sets voice, structured form binds names)', () => {
       const prompt = composeSystemPrompt({
         designSystemTitle: 'default',
         designSystemBody: 'PROSE_BODY_MARKER',
         designSystemTokensCss: sampleTokensCss,
+        designSystemComponentsManifest: sampleComponentsManifest,
         designSystemFixtureHtml: sampleFixtureHtml,
       });
       const proseAt = prompt.indexOf('PROSE_BODY_MARKER');
       const tokensAt = prompt.indexOf('## Active design system tokens');
-      const fixtureAt = prompt.indexOf('## Reference fixture');
+      const fixtureAt = prompt.indexOf('## Reference component manifest');
       expect(proseAt).toBeGreaterThan(0);
       expect(tokensAt).toBeGreaterThan(proseAt);
       expect(fixtureAt).toBeGreaterThan(tokensAt);
@@ -358,9 +603,11 @@ describe('composeSystemPrompt', () => {
         designSystemTitle: 'default',
         designSystemBody: '# x\n\nbody',
         designSystemTokensCss: '   \n  \t  ',
+        designSystemComponentsManifest: '\n\t',
         designSystemFixtureHtml: '\n\n',
       });
       expect(prompt).not.toContain('## Active design system tokens');
+      expect(prompt).not.toContain('## Reference component manifest');
       expect(prompt).not.toContain('## Reference fixture');
     });
   });
