@@ -11,13 +11,19 @@ import {
   DESKTOP_UPDATE_CHANNELS,
   DESKTOP_UPDATE_MODES,
   DESKTOP_UPDATE_STATES,
+  type DesktopExportArtifactInput,
+  type DesktopExportArtifactResult,
   type DesktopExportPdfInput,
   type DesktopExportPdfResult,
+  type DesktopRenderSlidesInput,
+  type DesktopRenderSlidesResult,
   type DesktopUpdateStatusSnapshot,
 } from "@open-design/sidecar-proto";
 import type { OpenDesignHostActionResult, OpenDesignHostCaptureResult, OpenDesignHostUpdaterActionOptions } from "@open-design/host";
 
+import { renderDeckSlides } from "./deck-capture.js";
 import { openValidatedDirectory } from "./open-path.js";
+import { exportArtifact as exportArtifactFromHtml } from "./artifact-export.js";
 import { createElectronPdfTarget, exportPdfFromHtml, savePrintReadyDocumentAsPdf } from "./pdf-export.js";
 import { SPLASH_VIDEO_DATA_URL } from "./splash-video.js";
 import type { PrintReadyPdfOptions } from "./pdf-export.js";
@@ -218,6 +224,19 @@ export function signDesktopImportToken(
   return [options.nonce, options.exp, signature].join(DESKTOP_IMPORT_TOKEN_FIELD_SEP);
 }
 
+/**
+ * An HTTP 5xx main-frame document is a failed load. Electron resolves
+ * `loadURL` for any response that carries a body — `did-fail-load` fires
+ * only for net::ERR_* failures — so an error document (e.g. the packaged
+ * od:// proxy's synthetic 502) parks the renderer on a dead page the
+ * recovery loop never sees. Route it into the same renderer-failed
+ * reload path as a network failure. Electron reports non-HTTP
+ * navigations with 0 / -1, which must never trip this.
+ */
+export function isRendererFailureHttpStatus(httpResponseCode: number): boolean {
+  return httpResponseCode >= 500;
+}
+
 const PENDING_POLL_MS = 120;
 const RUNNING_POLL_MS = 2000;
 // Minimum time the light splash window stays on screen before we reveal the main
@@ -316,7 +335,9 @@ export type DesktopRuntime = {
   click(input: DesktopClickInput): Promise<DesktopClickResult>;
   console(): DesktopConsoleResult;
   eval(input: DesktopEvalInput): Promise<DesktopEvalResult>;
+  exportArtifact(input: DesktopExportArtifactInput): Promise<DesktopExportArtifactResult>;
   exportPdf(input: DesktopExportPdfInput): Promise<DesktopExportPdfResult>;
+  renderSlides(input: DesktopRenderSlidesInput): Promise<DesktopRenderSlidesResult>;
   screenshot(input: DesktopScreenshotInput): Promise<DesktopScreenshotResult>;
   show(): void;
   status(): DesktopStatusSnapshot;
@@ -394,6 +415,14 @@ export type DesktopRuntimeOptions = {
    */
   splashStartedAt?: number;
   updater?: DesktopUpdater;
+  /**
+   * Fired once the main window is actually revealed (the web app mounted and
+   * the window is shown) — the real "app is running" moment, distinct from
+   * `createDesktopRuntime` returning (which starts async bootstrap via
+   * `void tick()` and returns before the first load). Used to mark the session
+   * as having reached running for abnormal-exit detection.
+   */
+  onRevealed?: () => void;
 };
 
 const DESKTOP_IMPORT_TOKEN_HEADER = "X-OD-Desktop-Import-Token";
@@ -1390,33 +1419,51 @@ export function hideWindowExitingFullscreen(window: WindowFullscreenSurface): vo
   window.hide();
 }
 
-// Some exports reach the renderer through a normal `<a download>` link
-// (server-written PPTX, browser-generated image blobs). Without this hook
-// Electron writes the bytes straight to the OS Downloads folder, so the user
-// never gets to pick a destination. setSaveDialogOptions makes Electron show
-// the native Save As panel before the download starts.
+// Some image exports reach the renderer through a normal `<a download>` link.
+// Without this hook Electron writes the bytes straight to the OS Downloads
+// folder, so the user never gets to pick a destination. setSaveDialogOptions
+// makes Electron show the native Save As panel before the download starts.
 const IMAGE_SAVE_AS_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp"]);
-const SAVE_AS_EXTENSIONS = new Set([".pptx", ...IMAGE_SAVE_AS_EXTENSIONS]);
+// Every programmatic export that streams a download must prompt Save As, incl.
+// the screenshot PDF (the default Export PDF flow) — otherwise it silently lands
+// in the OS Downloads folder while PPTX/images prompt correctly.
+const SAVE_AS_EXTENSIONS = new Set([".pptx", ".pdf", ...IMAGE_SAVE_AS_EXTENSIONS]);
+
+interface SaveAsDialogOptions {
+  title: string;
+  defaultPath: string;
+  filters: Array<{ name: string; extensions: string[] }>;
+  properties: Array<"dontAddToRecent">;
+}
+
+// Pure: the Save As dialog options for a downloaded filename, or null when the
+// extension isn't one we intercept. Exported for tests.
+export function saveAsDialogOptionsForFilename(filename: string): SaveAsDialogOptions | null {
+  const dot = filename.lastIndexOf(".");
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
+  if (!SAVE_AS_EXTENSIONS.has(ext)) return null;
+  const filters = IMAGE_SAVE_AS_EXTENSIONS.has(ext)
+    ? [
+        { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
+        { name: "All Files", extensions: ["*"] },
+      ]
+    : ext === ".pdf"
+      ? [
+          { name: "PDF Document", extensions: ["pdf"] },
+          { name: "All Files", extensions: ["*"] },
+        ]
+      : [
+          { name: "PowerPoint Presentation", extensions: ["pptx"] },
+          { name: "All Files", extensions: ["*"] },
+        ];
+  return { title: "Save As", defaultPath: filename, filters, properties: ["dontAddToRecent"] };
+}
 
 function attachDownloadSaveAsDialog(window: BrowserWindow): void {
   window.webContents.session.on("will-download", (_event, item) => {
-    const filename = item.getFilename();
-    const dot = filename.lastIndexOf(".");
-    const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : "";
-    if (!SAVE_AS_EXTENSIONS.has(ext)) return;
-    item.setSaveDialogOptions({
-      title: "Save As",
-      defaultPath: filename,
-      filters: IMAGE_SAVE_AS_EXTENSIONS.has(ext)
-        ? [
-            { name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] },
-            { name: "All Files", extensions: ["*"] },
-          ]
-        : [
-            { name: "PowerPoint Presentation", extensions: ["pptx"] },
-            { name: "All Files", extensions: ["*"] },
-          ],
-    });
+    const options = saveAsDialogOptionsForFilename(item.getFilename());
+    if (!options) return;
+    item.setSaveDialogOptions(options);
   });
 }
 
@@ -1536,7 +1583,11 @@ async function showDirectoryPickerForSender(
   const parent =
     BrowserWindow.fromWebContents(sender) ?? BrowserWindow.getFocusedWindow();
   const pickerOptions: Electron.OpenDialogOptions = {
-    properties: ["openDirectory", "createDirectory"],
+    // `dontAddToRecent` avoids shell recent-items / jump-list writes against
+    // the browsed folder. Combined with not seeding a cloud-backed default
+    // location, this trims the shell work that stalls the native picker on
+    // OneDrive-backed folders (see AppHangB1 note in diagnostics.ts).
+    properties: ["openDirectory", "createDirectory", "dontAddToRecent"],
   };
   return parent
     ? dialog.showOpenDialog(parent, pickerOptions)
@@ -1842,11 +1893,18 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
   // PostHog with `device_id = installationId`. Best-effort: a failure to
   // reach the daemon must not block the crash recovery flow.
   window.webContents.on("render-process-gone", (_event, details) => {
+    // During app quit / teardown the renderer goes away and the window (and its
+    // webContents) can already be destroyed when this fires. Reading getURL()
+    // then throws "Object has been destroyed" as a fatal uncaught exception, so
+    // guard the same way `sendUpdaterStatus` does below and skip crash-report /
+    // recovery work once the window is already on its way out.
+    const gone = window.isDestroyed() || window.webContents.isDestroyed();
     console.error("[open-design desktop] main window render-process-gone", {
       exitCode: details.exitCode,
       reason: details.reason,
-      url: window.webContents.getURL(),
+      url: gone ? null : window.webContents.getURL(),
     });
+    if (gone) return;
     void reportRendererCrash(options, {
       reason: details.reason,
       exit_code: typeof details.exitCode === "number" ? details.exitCode : null,
@@ -1862,6 +1920,20 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
   // else means the load to the web server failed and needs a retry.
   window.webContents.on("did-fail-load", (_event, errorCode, _description, _url, isMainFrame) => {
     if (isMainFrame && errorCode !== -3) markRendererFailed();
+  });
+  // `did-fail-load` never fires for an HTTP error *document* — a 5xx response
+  // with a body is a successful load to Electron — so a 502 page (e.g. the
+  // packaged od:// proxy's exhaustion fallback) would otherwise sit on screen
+  // until a manual reload. `did-navigate` is main-frame-only and carries the
+  // HTTP status (-1 for non-HTTP navigations); in-page SPA routing emits
+  // `did-navigate-in-page` instead, so app navigation never trips this.
+  window.webContents.on("did-navigate", (_event, url, httpResponseCode) => {
+    if (!isRendererFailureHttpStatus(httpResponseCode)) return;
+    console.error("[open-design desktop] main window loaded an HTTP error document", {
+      httpResponseCode,
+      url,
+    });
+    markRendererFailed();
   });
 
   const sendUpdaterStatus = (status = options.updater?.snapshot() ?? unavailableUpdaterStatus()) => {
@@ -2147,6 +2219,13 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
     window.focus();
     ensureWindowVisible(window);
     if (splash != null && !splash.isDestroyed()) splash.close();
+    // The app is now truly up (mounted + shown). Fire once — revealed guards
+    // re-entry — so callers can mark "reached running".
+    try {
+      options.onRevealed?.();
+    } catch {
+      // A callback fault must not break reveal.
+    }
   };
 
   // Hold the splash until BOTH (a) the web bundle reports it has mounted — it
@@ -2215,13 +2294,18 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
       // restored from the background recovers instead of staying blank.
       if (url != null && (url !== currentUrl || rendererFailed)) {
         pendingUrl = url;
+        // Clear the failure flag BEFORE the load: `did-navigate` (which
+        // re-flags an HTTP 5xx error document) fires before `loadURL`'s
+        // promise resolves, so clearing afterwards would clobber a failure
+        // detected mid-load. A rejecting `loadURL` re-flags via
+        // `did-fail-load`, so net-error behavior is unchanged.
+        rendererFailed = false;
         // Load the web app into the still-hidden main window as soon as it is
         // discovered; it mounts behind the splash so the swap is instant.
         console.info("[open-design desktop] main window loadURL start", { currentUrl, url });
         await window.loadURL(url);
         console.info("[open-design desktop] main window loadURL success", { url });
         currentUrl = url;
-        rendererFailed = false;
         pendingUrl = null;
         const nextPetUrl = desktopPetUrl(url);
         if (!petWindow.isDestroyed() && nextPetUrl !== currentPetUrl) {
@@ -2236,7 +2320,10 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
       } else if (url == null) {
         pendingUrl = null;
       }
-      schedule(currentUrl == null ? PENDING_POLL_MS : RUNNING_POLL_MS);
+      // A renderer still flagged failed (e.g. the document that just "loaded"
+      // was an HTTP 5xx error page) re-polls at the same prompt cadence as the
+      // connection-refused recovery path.
+      schedule(currentUrl == null || rendererFailed ? PENDING_POLL_MS : RUNNING_POLL_MS);
     } catch (error) {
       pendingUrl = null;
       console.error("desktop web discovery failed", error);
@@ -2308,8 +2395,14 @@ export async function createDesktopRuntime(options: DesktopRuntimeOptions): Prom
         return { error: error instanceof Error ? error.message : String(error), ok: false };
       }
     },
+    exportArtifact(input) {
+      return exportArtifactFromHtml(input);
+    },
     exportPdf(input) {
       return exportPdfFromHtml(input);
+    },
+    renderSlides(input) {
+      return renderDeckSlides(input);
     },
     async screenshot(input) {
       if (window.isDestroyed()) throw new Error("desktop window is destroyed");
