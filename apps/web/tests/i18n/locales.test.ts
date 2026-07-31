@@ -131,6 +131,10 @@ describe('i18n locales', () => {
     expect(explicitLocaleKeys('de').length).toBeGreaterThanOrEqual(1_578);
   });
 
+  it('does not regress the refreshed Spanish dictionary coverage', () => {
+    expect(explicitLocaleKeys('es-ES').length).toBeGreaterThanOrEqual(1_578);
+  });
+
   it('avoids brittle per-key English lookups in the Indonesian locale source', () => {
     const source = readFileSync(new URL('../../src/i18n/locales/id.ts', import.meta.url), 'utf8');
 
