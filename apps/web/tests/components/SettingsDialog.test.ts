@@ -107,7 +107,7 @@ describe('SettingsDialog API protocol switching', () => {
       apiProtocol: 'openai',
       apiKey: '',
       baseUrl: 'https://api.openai.com/v1',
-      model: 'gpt-4o',
+      model: 'gpt-5.2',
       apiProviderBaseUrl: 'https://api.openai.com/v1',
     });
   });
