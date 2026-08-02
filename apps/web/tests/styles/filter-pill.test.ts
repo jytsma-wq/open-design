@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const indexCss = readFileSync(new URL('../../src/index.css', import.meta.url), 'utf8');
+const indexCss = readFileSync(new URL('../../src/index.css', import.meta.url), 'utf8').replace(
+  /\r\n?/g,
+  '\n',
+);
 
 function cssBlock(selector: string): string {
   const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

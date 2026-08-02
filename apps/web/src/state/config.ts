@@ -57,19 +57,22 @@ export const DEFAULT_ORBIT: OrbitConfig = {
 };
 
 export const DEFAULT_CONFIG: AppConfig = {
-  mode: 'api',
-  apiKey: process.env.OPENAI_API_KEY ?? '',
-  baseUrl: 'https://api.openai.com/v1',
-  model: 'gpt-5.2',
-  apiProtocol: 'openai',
+  mode: 'daemon',
+  apiKey: '',
+  baseUrl: 'https://api.anthropic.com',
+  model: 'claude-sonnet-4-5',
+  // New configs should be explicit. loadConfig() still detects parsed legacy
+  // saved configs that did not have this field and migrates those from their
+  // saved baseUrl/model before applying the current migration version.
+  apiProtocol: 'anthropic',
   apiVersion: '',
   apiProtocolConfigs: {},
   configMigrationVersion: CONFIG_MIGRATION_VERSION,
-  apiProviderBaseUrl: 'https://api.openai.com/v1',
+  apiProviderBaseUrl: 'https://api.anthropic.com',
   agentId: null,
   skillId: null,
   designSystemId: null,
-  onboardingCompleted: true,
+  onboardingCompleted: false,
   theme: 'system',
   accentColor: DEFAULT_ACCENT_COLOR,
   mediaProviders: {},

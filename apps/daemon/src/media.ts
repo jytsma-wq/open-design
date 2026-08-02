@@ -45,7 +45,7 @@ import { execFile as execFileCb, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { Agent as UndiciAgent } from 'undici';
+import { Agent as UndiciAgent, fetch as undiciFetch } from 'undici';
 import {
   AUDIO_DURATIONS_SEC,
   type AudioKind,
@@ -722,11 +722,11 @@ async function renderOpenAIImage(ctx: MediaContext, credentials: ProviderConfig)
     headers['api-key'] = credentials.apiKey;
   }
 
-  const resp = await fetch(url, {
+  const resp = await undiciFetch(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
-    dispatcher: openAIImageDispatcher as unknown as NonNullable<RequestInit['dispatcher']>,
+    dispatcher: openAIImageDispatcher,
   });
   const text = await resp.text();
   if (!resp.ok) {
