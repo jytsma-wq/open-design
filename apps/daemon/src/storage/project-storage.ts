@@ -349,7 +349,7 @@ export class S3ProjectStorage implements ProjectStorage {
     const init: RequestInit = {
       method:  args.method,
       headers,
-      ...(args.body ? { body: args.body } : {}),
+      ...(args.body ? { body: new Uint8Array(args.body) } : {}),
     };
     return this.fetchFn(url, init);
   }

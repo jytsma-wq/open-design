@@ -10,9 +10,13 @@ const ciWorkflowPath = join(workspaceRoot, ".github", "workflows", "ci.yml");
 const releaseBetaWorkflowPath = join(workspaceRoot, ".github", "workflows", "release-beta.yml");
 const releaseStableWorkflowPath = join(workspaceRoot, ".github", "workflows", "release-stable.yml");
 
+async function readWorkflow(path: string): Promise<string> {
+  return (await readFile(path, "utf8")).replaceAll("\r\n", "\n");
+}
+
 describe("packaged smoke workflow", () => {
   it("builds the PR mac smoke artifact without portable mode", async () => {
-    const workflow = await readFile(ciWorkflowPath, "utf8");
+    const workflow = await readWorkflow(ciWorkflowPath);
     const macBuildStep = workflow.match(/- name: Build PR mac artifacts\n(?:.+\n)+?(?=\n      - name: Smoke PR mac packaged runtime)/m);
 
     expect(macBuildStep?.[0]).toBeDefined();
@@ -20,7 +24,7 @@ describe("packaged smoke workflow", () => {
   });
 
   it("runs a linux headless packaged smoke job when packaged changes require smoke", async () => {
-    const workflow = await readFile(ciWorkflowPath, "utf8");
+    const workflow = await readWorkflow(ciWorkflowPath);
     expect(workflow).toContain("packaged_smoke_linux_headless:");
     expect(workflow).toContain("e2e/lib/linux-helpers.ts");
     expect(workflow).toContain("Build PR linux headless artifacts");
@@ -34,7 +38,7 @@ describe("packaged smoke workflow", () => {
   });
 
   it("preserves beta linux AppImage smoke reports for release publication", async () => {
-    const workflow = await readFile(releaseBetaWorkflowPath, "utf8");
+    const workflow = await readWorkflow(releaseBetaWorkflowPath);
     const linuxBuildStep = workflow.match(
       /- name: Build beta linux artifacts\n(?:.+\n)+?(?=\n      - name: Smoke beta linux AppImage runtime)/m,
     );
@@ -53,7 +57,7 @@ describe("packaged smoke workflow", () => {
   });
 
   it("preserves stable linux AppImage smoke reports for release publication", async () => {
-    const workflow = await readFile(releaseStableWorkflowPath, "utf8");
+    const workflow = await readWorkflow(releaseStableWorkflowPath);
     const linuxBuildStep = workflow.match(
       /- name: Build release linux artifacts\n(?:.+\n)+?(?=\n      - name: Smoke release linux AppImage runtime)/m,
     );
