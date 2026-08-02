@@ -20,6 +20,18 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { undiciFetchMock } = vi.hoisted(() => ({
+  undiciFetchMock: vi.fn(),
+}));
+
+vi.mock('undici', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('undici')>();
+  return {
+    ...actual,
+    fetch: undiciFetchMock,
+  };
+});
+
 import { generateMedia } from '../src/media.js';
 
 const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+X2uoAAAAASUVORK5CYII=';
@@ -43,6 +55,7 @@ describe('media alias preserves catalog-keyed capability branching (#1309 review
     delete process.env.OD_MEDIA_CONFIG_DIR;
     delete process.env.OD_DATA_DIR;
     process.env.OPENAI_API_KEY = 'sk-test-key';
+    undiciFetchMock.mockReset();
   });
 
   afterEach(async () => {
@@ -84,15 +97,13 @@ describe('media alias preserves catalog-keyed capability branching (#1309 review
     });
 
     let capturedBody: Record<string, unknown> | null = null;
-    const fetchMock = vi.fn(async (_input: unknown, init?: RequestInit) => {
+    undiciFetchMock.mockImplementation(async (_input: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
       return new Response(
         JSON.stringify({ data: [{ b64_json: PNG_BASE64 }] }),
         { status: 200, headers: { 'content-type': 'application/json' } },
       );
     });
-    vi.stubGlobal('fetch', fetchMock);
-
     const result = await generateMedia({
       projectRoot,
       projectsRoot,
@@ -104,7 +115,7 @@ describe('media alias preserves catalog-keyed capability branching (#1309 review
       output: 'aliased.png',
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(undiciFetchMock).toHaveBeenCalledTimes(1);
     expect(capturedBody).not.toBeNull();
     // Wire name swap landed — the provider receives the alias.
     expect(capturedBody!.model).toBe('azure-dalle3-deployment');
